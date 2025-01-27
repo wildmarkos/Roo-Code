@@ -52,7 +52,7 @@ export interface ExtensionMessage {
 		| "didBecomeVisible"
 	invoke?: "sendMessage" | "primaryButtonClick" | "secondaryButtonClick"
 	state?: ExtensionState
-	bool?: boolean // Used for boolean settings like keepBrowserOpen
+	bool?: boolean
 	images?: string[]
 	ollamaModels?: string[]
 	lmStudioModels?: string[]
