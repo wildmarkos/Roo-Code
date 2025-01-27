@@ -52,7 +52,6 @@ export interface ExtensionMessage {
 		| "didBecomeVisible"
 	invoke?: "sendMessage" | "primaryButtonClick" | "secondaryButtonClick"
 	state?: ExtensionState
-	bool?: boolean
 	images?: string[]
 	ollamaModels?: string[]
 	lmStudioModels?: string[]
