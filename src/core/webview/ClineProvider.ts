@@ -120,6 +120,7 @@ type GlobalStateKey =
 	| "experimentalDiffStrategy"
 	| "autoApprovalEnabled"
 	| "customModes" // Array of custom modes
+	| "keepBrowserOpen"
 
 export const GlobalFileNames = {
 	apiConversationHistory: "api_conversation_history.json",
@@ -1177,6 +1178,10 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 						}
 						await this.postStateToWebview()
 						break
+					case "keepBrowserOpen":
+						await this.updateGlobalState("keepBrowserOpen", message.bool ?? false)
+						await this.postStateToWebview()
+						break
 					case "updateMcpTimeout":
 						if (message.serverName && typeof message.timeout === "number") {
 							try {
@@ -1836,6 +1841,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			enhancementApiConfigId,
 			experimentalDiffStrategy,
 			autoApprovalEnabled,
+			keepBrowserOpen,
 		} = await this.getState()
 
 		const allowedCommands = vscode.workspace.getConfiguration("roo-cline").get<string[]>("allowedCommands") || []
@@ -1844,6 +1850,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			version: this.context.extension?.packageJSON?.version ?? "",
 			apiConfiguration,
 			customInstructions,
+			keepBrowserOpen: keepBrowserOpen ?? false,
 			alwaysAllowReadOnly: alwaysAllowReadOnly ?? false,
 			alwaysAllowWrite: alwaysAllowWrite ?? false,
 			alwaysAllowExecute: alwaysAllowExecute ?? false,
@@ -2001,6 +2008,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			experimentalDiffStrategy,
 			autoApprovalEnabled,
 			customModes,
+			keepBrowserOpen,
 		] = await Promise.all([
 			this.getGlobalState("apiProvider") as Promise<ApiProvider | undefined>,
 			this.getGlobalState("apiModelId") as Promise<string | undefined>,
@@ -2070,6 +2078,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			this.getGlobalState("experimentalDiffStrategy") as Promise<boolean | undefined>,
 			this.getGlobalState("autoApprovalEnabled") as Promise<boolean | undefined>,
 			this.customModesManager.getCustomModes(),
+			this.getGlobalState("keepBrowserOpen") as Promise<boolean | undefined>,
 		])
 
 		let apiProvider: ApiProvider
@@ -2185,6 +2194,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			experimentalDiffStrategy: experimentalDiffStrategy ?? false,
 			autoApprovalEnabled: autoApprovalEnabled ?? false,
 			customModes,
+			keepBrowserOpen: keepBrowserOpen ?? false,
 		}
 	}
 
