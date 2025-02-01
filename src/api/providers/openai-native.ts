@@ -48,6 +48,34 @@ export class OpenAiNativeHandler implements ApiHandler, SingleCompletionHandler 
 				}
 				break
 			}
+			case "o3-mini": {
+				const stream = await this.client.chat.completions.create({
+					model: this.getModel().id,
+					messages: [{ role: "developer", content: systemPrompt }, ...convertToOpenAiMessages(messages)],
+					stream: true,
+					stream_options: { include_usage: true },
+				})
+
+				for await (const chunk of stream) {
+					const delta = chunk.choices[0]?.delta
+					if (delta?.content) {
+						yield {
+							type: "text",
+							text: delta.content,
+						}
+					}
+
+					// contains a null value except for the last chunk which contains the token usage statistics for the entire request
+					if (chunk.usage) {
+						yield {
+							type: "usage",
+							inputTokens: chunk.usage.prompt_tokens || 0,
+							outputTokens: chunk.usage.completion_tokens || 0,
+						}
+					}
+				}
+				break
+			}
 			default: {
 				const stream = await this.client.chat.completions.create({
 					model: this.getModel().id,
