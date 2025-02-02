@@ -1,5 +1,47 @@
 # Roo Code Changelog
 
+## [3.3.9]
+
+- Add o3-mini-high and o3-mini-low
+
+## [3.3.8]
+
+- Fix o3-mini in the Glama provider (thanks @Punkpeye!)
+- Add the option to omit instructions for creating MCP servers from the system prompt (thanks @samhvw8!)
+- Fix a bug where renaming API profiles without actually changing the name would delete them (thanks @samhvw8!)
+
+## [3.3.7]
+
+- Support for o3-mini (thanks @shpigunov!)
+- Code Action improvements to allow selecting code and adding it to context, plus bug fixes (thanks @samhvw8!)
+- Ability to include a message when approving or rejecting tool use (thanks @napter!)
+- Improvements to chat input box styling (thanks @psv2522!)
+- Capture reasoning from more variants of DeepSeek R1 (thanks @Szpadel!)
+- Use an exponential backoff for API retries (if delay after first error is 5s, delay after second consecutive error will be 10s, then 20s, etc)
+- Add a slider in advanced settings to enable rate limiting requests to avoid overloading providers (i.e. wait at least 10 seconds between API requests)
+- Prompt tweaks to make Roo better at creating new custom modes for you
+
+## [3.3.6]
+
+- Add a "new task" tool that allows Roo to start new tasks with an initial message and mode
+- Fix a bug that was preventing the use of qwen-max and potentially other OpenAI-compatible providers (thanks @Szpadel!)
+- Add support for perplexity/sonar-reasoning (thanks @Szpadel!)
+- Visual fixes to dropdowns (thanks @psv2522!)
+- Add the [Unbound](https://getunbound.ai/) provider (thanks @vigneshsubbiah16!)
+
+## [3.3.5]
+
+- Make information about the conversation's context window usage visible in the task header for humans and in the environment for models (thanks @MuriloFP!)
+- Add checkboxes to auto-approve mode switch requests (thanks @MuriloFP!)
+- Add new experimental editing tools `insert_content` (for inserting blocks of text at a line number) and `search_and_replace` (for replacing all instances of a phrase or regex) to complement diff editing and whole file editing (thanks @samhvw8!)
+- Improved DeepSeek R1 support by capturing reasoning from DeepSeek API as well as more OpenRouter variants, not using system messages, and fixing a crash on empty chunks. Still depends on the DeepSeek API staying up but we'll be in a better place when it does! (thanks @Szpadel!)
+
+## [3.3.4]
+
+- Add per-server MCP network timeout configuration ranging from 15 seconds to an hour
+- Speed up diff editing (thanks @hannesrudolph and @KyleHerndon!)
+- Add option to perform explain/improve/fix code actions either in the existing task or a new task (thanks @samhvw8!)
+
 ## [3.3.3]
 
 - Throw errors sooner when a mode tries to write a restricted file

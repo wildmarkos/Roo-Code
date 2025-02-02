@@ -1,5 +1,25 @@
 # Roo Code (prev. Roo Cline)
 
+<table>
+<tbody>
+<td align="center">
+<a href="https://marketplace.visualstudio.com/items?itemName=RooVeterinaryInc.roo-cline" target="_blank"><strong>Download on VS Marketplace</strong></a>
+</td>
+<td align="center">
+<a href="https://discord.gg/roocode" target="_blank"><strong>Discord</strong></a>
+</td>
+<td align="center">
+<a href="https://www.reddit.com/r/RooCode/" target="_blank"><strong>r/RooCode</strong></a>
+</td>
+<td align="center">
+<a href="https://github.com/RooVetGit/Roo-Code/discussions/categories/feature-requests?discussions_q=is%3Aopen+category%3A%22Feature+Requests%22+sort%3Atop" target="_blank"><strong>Feature Requests</strong></a>
+</td>
+<td align="center">
+<a href="https://marketplace.visualstudio.com/items?itemName=RooVeterinaryInc.roo-cline&ssr=false#review-details" target="_blank"><strong>Rate & Review</strong></a>
+</td>
+</tbody>
+</table>
+
 **Roo Code** is an AI-powered **autonomous coding agent** that lives in your editor. It can:
 
 - Communicate in natural language
@@ -235,8 +255,14 @@ Roo Code is available on:
     ```bash
     code --install-extension bin/roo-code-4.0.0.vsix
     ```
-5. **Debug**:
+5. **Start the webview (Vite/React app with HMR)**:
+    ```bash
+    npm run dev
+    ```
+6. **Debug**:
     - Press `F5` (or **Run** → **Start Debugging**) in VSCode to open a new session with Roo Code loaded.
+
+Changes to the webview will appear immediately. Changes to the core extension will require a restart of the extension host.
 
 We use [changesets](https://github.com/changesets/changesets) for versioning and publishing. Check our `CHANGELOG.md` for release notes.
 

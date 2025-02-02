@@ -60,6 +60,8 @@ import { BrowserSession } from "../services/browser/BrowserSession"
 import { OpenRouterHandler } from "../api/providers/openrouter"
 import { McpHub } from "../services/mcp/McpHub"
 import crypto from "crypto"
+import { insertGroups } from "./diff/insert-groups"
+import { EXPERIMENT_IDS, experiments as Experiments } from "../shared/experiments"
 
 const cwd =
 	vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath).at(0) ?? path.join(os.homedir(), "Desktop") // may or may not exist but fs checking existence would immediately ask for permission which would be bad UX, need to come up with a better solution
@@ -94,6 +96,7 @@ export class Cline {
 	didFinishAborting = false
 	abandoned = false
 	private diffViewProvider: DiffViewProvider
+	private lastApiRequestTime?: number
 
 	// streaming
 	private currentStreamingContentIndex = 0
@@ -115,7 +118,7 @@ export class Cline {
 		task?: string | undefined,
 		images?: string[] | undefined,
 		historyItem?: HistoryItem | undefined,
-		experimentalDiffStrategy: boolean = false,
+		experiments?: Record<string, boolean>,
 	) {
 		if (!task && !images && !historyItem) {
 			throw new Error("Either historyItem or task/images must be provided")
@@ -137,7 +140,7 @@ export class Cline {
 		}
 
 		// Initialize diffStrategy based on current state
-		this.updateDiffStrategy(experimentalDiffStrategy)
+		this.updateDiffStrategy(Experiments.isEnabled(experiments ?? {}, EXPERIMENT_IDS.DIFF_STRATEGY))
 
 		if (task || images) {
 			this.startTask(task, images)
@@ -150,9 +153,8 @@ export class Cline {
 	async updateDiffStrategy(experimentalDiffStrategy?: boolean) {
 		// If not provided, get from current state
 		if (experimentalDiffStrategy === undefined) {
-			const { experimentalDiffStrategy: stateExperimentalDiffStrategy } =
-				(await this.providerRef.deref()?.getState()) ?? {}
-			experimentalDiffStrategy = stateExperimentalDiffStrategy ?? false
+			const { experiments: stateExperimental } = (await this.providerRef.deref()?.getState()) ?? {}
+			experimentalDiffStrategy = stateExperimental?.[EXPERIMENT_IDS.DIFF_STRATEGY] ?? false
 		}
 		this.diffStrategy = getDiffStrategy(this.api.getModel().id, this.fuzzyMatchThreshold, experimentalDiffStrategy)
 	}
@@ -630,7 +632,7 @@ export class Cline {
 
 		let newUserContent: UserContent = [...modifiedOldUserContent]
 
-		const agoText = (() => {
+		const agoText = ((): string => {
 			const timestamp = lastClineMessage?.ts ?? Date.now()
 			const now = Date.now()
 			const diff = now - timestamp
@@ -792,11 +794,42 @@ export class Cline {
 		}
 	}
 
-	async *attemptApiRequest(previousApiReqIndex: number): ApiStream {
+	async *attemptApiRequest(previousApiReqIndex: number, retryAttempt: number = 0): ApiStream {
 		let mcpHub: McpHub | undefined
 
-		const { mcpEnabled, alwaysApproveResubmit, requestDelaySeconds } =
+		const { mcpEnabled, alwaysApproveResubmit, requestDelaySeconds, rateLimitSeconds } =
 			(await this.providerRef.deref()?.getState()) ?? {}
+
+		let finalDelay = 0
+
+		// Only apply rate limiting if this isn't the first request
+		if (this.lastApiRequestTime) {
+			const now = Date.now()
+			const timeSinceLastRequest = now - this.lastApiRequestTime
+			const rateLimit = rateLimitSeconds || 0
+			const rateLimitDelay = Math.max(0, rateLimit * 1000 - timeSinceLastRequest)
+			finalDelay = rateLimitDelay
+		}
+
+		// Add exponential backoff delay for retries
+		if (retryAttempt > 0) {
+			const baseDelay = requestDelaySeconds || 5
+			const exponentialDelay = Math.ceil(baseDelay * Math.pow(2, retryAttempt)) * 1000
+			finalDelay = Math.max(finalDelay, exponentialDelay)
+		}
+
+		if (finalDelay > 0) {
+			// Show countdown timer
+			for (let i = Math.ceil(finalDelay / 1000); i > 0; i--) {
+				const delayMessage =
+					retryAttempt > 0 ? `Retrying in ${i} seconds...` : `Rate limiting for ${i} seconds...`
+				await this.say("api_req_retry_delayed", delayMessage, undefined, true)
+				await delay(1000)
+			}
+		}
+
+		// Update last request time before making the request
+		this.lastApiRequestTime = Date.now()
 
 		if (mcpEnabled ?? true) {
 			mcpHub = this.providerRef.deref()?.mcpHub
@@ -809,8 +842,14 @@ export class Cline {
 			})
 		}
 
-		const { browserViewportSize, mode, customModePrompts, preferredLanguage } =
-			(await this.providerRef.deref()?.getState()) ?? {}
+		const {
+			browserViewportSize,
+			mode,
+			customModePrompts,
+			preferredLanguage,
+			experiments,
+			enableMcpServerCreation,
+		} = (await this.providerRef.deref()?.getState()) ?? {}
 		const { customModes } = (await this.providerRef.deref()?.getState()) ?? {}
 		const systemPrompt = await (async () => {
 			const provider = this.providerRef.deref()
@@ -830,6 +869,8 @@ export class Cline {
 				this.customInstructions,
 				preferredLanguage,
 				this.diffEnabled,
+				experiments,
+				enableMcpServerCreation,
 			)
 		})()
 
@@ -885,21 +926,29 @@ export class Cline {
 			// note that this api_req_failed ask is unique in that we only present this option if the api hasn't streamed any content yet (ie it fails on the first chunk due), as it would allow them to hit a retry button. However if the api failed mid-stream, it could be in any arbitrary state where some tools may have executed, so that error is handled differently and requires cancelling the task entirely.
 			if (alwaysApproveResubmit) {
 				const errorMsg = error.message ?? "Unknown error"
-				const requestDelay = requestDelaySeconds || 5
-				// Automatically retry with delay
-				// Show countdown timer in error color
-				for (let i = requestDelay; i > 0; i--) {
+				const baseDelay = requestDelaySeconds || 5
+				const exponentialDelay = Math.ceil(baseDelay * Math.pow(2, retryAttempt))
+
+				// Show countdown timer with exponential backoff
+				for (let i = exponentialDelay; i > 0; i--) {
 					await this.say(
 						"api_req_retry_delayed",
-						`${errorMsg}\n\nRetrying in ${i} seconds...`,
+						`${errorMsg}\n\nRetry attempt ${retryAttempt + 1}\nRetrying in ${i} seconds...`,
 						undefined,
 						true,
 					)
 					await delay(1000)
 				}
-				await this.say("api_req_retry_delayed", `${errorMsg}\n\nRetrying now...`, undefined, false)
-				// delegate generator output from the recursive call
-				yield* this.attemptApiRequest(previousApiReqIndex)
+
+				await this.say(
+					"api_req_retry_delayed",
+					`${errorMsg}\n\nRetry attempt ${retryAttempt + 1}\nRetrying now...`,
+					undefined,
+					false,
+				)
+
+				// delegate generator output from the recursive call with incremented retry count
+				yield* this.attemptApiRequest(previousApiReqIndex, retryAttempt + 1)
 				return
 			} else {
 				const { response } = await this.ask(
@@ -994,7 +1043,7 @@ export class Cline {
 				break
 			}
 			case "tool_use":
-				const toolDescription = () => {
+				const toolDescription = (): string => {
 					switch (block.name) {
 						case "execute_command":
 							return `[${block.name} for '${block.params.command}']`
@@ -1008,6 +1057,10 @@ export class Cline {
 							return `[${block.name} for '${block.params.regex}'${
 								block.params.file_pattern ? ` in '${block.params.file_pattern}'` : ""
 							}]`
+						case "insert_content":
+							return `[${block.name} for '${block.params.path}']`
+						case "search_and_replace":
+							return `[${block.name} for '${block.params.path}']`
 						case "list_files":
 							return `[${block.name} for '${block.params.path}']`
 						case "list_code_definition_names":
@@ -1024,6 +1077,12 @@ export class Cline {
 							return `[${block.name}]`
 						case "switch_mode":
 							return `[${block.name} to '${block.params.mode_slug}'${block.params.reason ? ` because: ${block.params.reason}` : ""}]`
+						case "new_task": {
+							const mode = block.params.mode ?? defaultModeSlug
+							const message = block.params.message ?? "(no message)"
+							const modeName = getModeBySlug(mode, customModes)?.name ?? mode
+							return `[${block.name} in ${modeName} mode: '${message}']`
+						}
 					}
 				}
 
@@ -1073,34 +1132,22 @@ export class Cline {
 				const askApproval = async (type: ClineAsk, partialMessage?: string) => {
 					const { response, text, images } = await this.ask(type, partialMessage, false)
 					if (response !== "yesButtonClicked") {
-						if (response === "messageResponse") {
+						// Handle both messageResponse and noButtonClicked with text
+						if (text) {
 							await this.say("user_feedback", text, images)
 							pushToolResult(
 								formatResponse.toolResult(formatResponse.toolDeniedWithFeedback(text), images),
 							)
-							// this.userMessageContent.push({
-							// 	type: "text",
-							// 	text: `${toolDescription()}`,
-							// })
-							// this.toolResults.push({
-							// 	type: "tool_result",
-							// 	tool_use_id: toolUseId,
-							// 	content: this.formatToolResponseWithImages(
-							// 		await this.formatToolDeniedFeedback(text),
-							// 		images
-							// 	),
-							// })
-							this.didRejectTool = true
-							return false
+						} else {
+							pushToolResult(formatResponse.toolDenied())
 						}
-						pushToolResult(formatResponse.toolDenied())
-						// this.toolResults.push({
-						// 	type: "tool_result",
-						// 	tool_use_id: toolUseId,
-						// 	content: await this.formatToolDenied(),
-						// })
 						this.didRejectTool = true
 						return false
+					}
+					// Handle yesButtonClicked with text
+					if (text) {
+						await this.say("user_feedback", text, images)
+						pushToolResult(formatResponse.toolResult(formatResponse.toolApprovedWithFeedback(text), images))
 					}
 					return true
 				}
@@ -1479,6 +1526,321 @@ export class Cline {
 							break
 						}
 					}
+
+					case "insert_content": {
+						const relPath: string | undefined = block.params.path
+						const operations: string | undefined = block.params.operations
+
+						const sharedMessageProps: ClineSayTool = {
+							tool: "appliedDiff",
+							path: getReadablePath(cwd, removeClosingTag("path", relPath)),
+						}
+
+						try {
+							if (block.partial) {
+								const partialMessage = JSON.stringify(sharedMessageProps)
+								await this.ask("tool", partialMessage, block.partial).catch(() => {})
+								break
+							}
+
+							// Validate required parameters
+							if (!relPath) {
+								this.consecutiveMistakeCount++
+								pushToolResult(await this.sayAndCreateMissingParamError("insert_content", "path"))
+								break
+							}
+
+							if (!operations) {
+								this.consecutiveMistakeCount++
+								pushToolResult(await this.sayAndCreateMissingParamError("insert_content", "operations"))
+								break
+							}
+
+							const absolutePath = path.resolve(cwd, relPath)
+							const fileExists = await fileExistsAtPath(absolutePath)
+
+							if (!fileExists) {
+								this.consecutiveMistakeCount++
+								const formattedError = `File does not exist at path: ${absolutePath}\n\n<error_details>\nThe specified file could not be found. Please verify the file path and try again.\n</error_details>`
+								await this.say("error", formattedError)
+								pushToolResult(formattedError)
+								break
+							}
+
+							let parsedOperations: Array<{
+								start_line: number
+								content: string
+							}>
+
+							try {
+								parsedOperations = JSON.parse(operations)
+								if (!Array.isArray(parsedOperations)) {
+									throw new Error("Operations must be an array")
+								}
+							} catch (error) {
+								this.consecutiveMistakeCount++
+								await this.say("error", `Failed to parse operations JSON: ${error.message}`)
+								pushToolResult(formatResponse.toolError("Invalid operations JSON format"))
+								break
+							}
+
+							this.consecutiveMistakeCount = 0
+
+							// Read the file
+							const fileContent = await fs.readFile(absolutePath, "utf8")
+							this.diffViewProvider.editType = "modify"
+							this.diffViewProvider.originalContent = fileContent
+							const lines = fileContent.split("\n")
+
+							const updatedContent = insertGroups(
+								lines,
+								parsedOperations.map((elem) => {
+									return {
+										index: elem.start_line - 1,
+										elements: elem.content.split("\n"),
+									}
+								}),
+							).join("\n")
+
+							// Show changes in diff view
+							if (!this.diffViewProvider.isEditing) {
+								await this.ask("tool", JSON.stringify(sharedMessageProps), true).catch(() => {})
+								// First open with original content
+								await this.diffViewProvider.open(relPath)
+								await this.diffViewProvider.update(fileContent, false)
+								this.diffViewProvider.scrollToFirstDiff()
+								await delay(200)
+							}
+
+							const diff = formatResponse.createPrettyPatch(relPath, fileContent, updatedContent)
+
+							if (!diff) {
+								pushToolResult(`No changes needed for '${relPath}'`)
+								break
+							}
+
+							await this.diffViewProvider.update(updatedContent, true)
+
+							const completeMessage = JSON.stringify({
+								...sharedMessageProps,
+								diff,
+							} satisfies ClineSayTool)
+
+							const didApprove = await this.ask("tool", completeMessage, false).then(
+								(response) => response.response === "yesButtonClicked",
+							)
+
+							if (!didApprove) {
+								await this.diffViewProvider.revertChanges()
+								pushToolResult("Changes were rejected by the user.")
+								break
+							}
+
+							const { newProblemsMessage, userEdits, finalContent } =
+								await this.diffViewProvider.saveChanges()
+							this.didEditFile = true
+
+							if (!userEdits) {
+								pushToolResult(
+									`The content was successfully inserted in ${relPath.toPosix()}.${newProblemsMessage}`,
+								)
+								await this.diffViewProvider.reset()
+								break
+							}
+
+							const userFeedbackDiff = JSON.stringify({
+								tool: "appliedDiff",
+								path: getReadablePath(cwd, relPath),
+								diff: userEdits,
+							} satisfies ClineSayTool)
+
+							console.debug("[DEBUG] User made edits, sending feedback diff:", userFeedbackDiff)
+							await this.say("user_feedback_diff", userFeedbackDiff)
+							pushToolResult(
+								`The user made the following updates to your content:\n\n${userEdits}\n\n` +
+									`The updated content, which includes both your original modifications and the user's edits, has been successfully saved to ${relPath.toPosix()}. Here is the full, updated content of the file:\n\n` +
+									`<final_file_content path="${relPath.toPosix()}">\n${finalContent}\n</final_file_content>\n\n` +
+									`Please note:\n` +
+									`1. You do not need to re-write the file with these changes, as they have already been applied.\n` +
+									`2. Proceed with the task using this updated file content as the new baseline.\n` +
+									`3. If the user's edits have addressed part of the task or changed the requirements, adjust your approach accordingly.` +
+									`${newProblemsMessage}`,
+							)
+							await this.diffViewProvider.reset()
+						} catch (error) {
+							handleError("insert content", error)
+							await this.diffViewProvider.reset()
+						}
+						break
+					}
+
+					case "search_and_replace": {
+						const relPath: string | undefined = block.params.path
+						const operations: string | undefined = block.params.operations
+
+						const sharedMessageProps: ClineSayTool = {
+							tool: "appliedDiff",
+							path: getReadablePath(cwd, removeClosingTag("path", relPath)),
+						}
+
+						try {
+							if (block.partial) {
+								const partialMessage = JSON.stringify({
+									path: removeClosingTag("path", relPath),
+									operations: removeClosingTag("operations", operations),
+								})
+								await this.ask("tool", partialMessage, block.partial).catch(() => {})
+								break
+							} else {
+								if (!relPath) {
+									this.consecutiveMistakeCount++
+									pushToolResult(
+										await this.sayAndCreateMissingParamError("search_and_replace", "path"),
+									)
+									break
+								}
+								if (!operations) {
+									this.consecutiveMistakeCount++
+									pushToolResult(
+										await this.sayAndCreateMissingParamError("search_and_replace", "operations"),
+									)
+									break
+								}
+
+								const absolutePath = path.resolve(cwd, relPath)
+								const fileExists = await fileExistsAtPath(absolutePath)
+
+								if (!fileExists) {
+									this.consecutiveMistakeCount++
+									const formattedError = `File does not exist at path: ${absolutePath}\n\n<error_details>\nThe specified file could not be found. Please verify the file path and try again.\n</error_details>`
+									await this.say("error", formattedError)
+									pushToolResult(formattedError)
+									break
+								}
+
+								let parsedOperations: Array<{
+									search: string
+									replace: string
+									start_line?: number
+									end_line?: number
+									use_regex?: boolean
+									ignore_case?: boolean
+									regex_flags?: string
+								}>
+
+								try {
+									parsedOperations = JSON.parse(operations)
+									if (!Array.isArray(parsedOperations)) {
+										throw new Error("Operations must be an array")
+									}
+								} catch (error) {
+									this.consecutiveMistakeCount++
+									await this.say("error", `Failed to parse operations JSON: ${error.message}`)
+									pushToolResult(formatResponse.toolError("Invalid operations JSON format"))
+									break
+								}
+
+								// Read the original file content
+								const fileContent = await fs.readFile(absolutePath, "utf-8")
+								this.diffViewProvider.editType = "modify"
+								this.diffViewProvider.originalContent = fileContent
+								let lines = fileContent.split("\n")
+
+								for (const op of parsedOperations) {
+									const flags = op.regex_flags ?? (op.ignore_case ? "gi" : "g")
+									const multilineFlags = flags.includes("m") ? flags : flags + "m"
+
+									const searchPattern = op.use_regex
+										? new RegExp(op.search, multilineFlags)
+										: new RegExp(escapeRegExp(op.search), multilineFlags)
+
+									if (op.start_line || op.end_line) {
+										const startLine = Math.max((op.start_line ?? 1) - 1, 0)
+										const endLine = Math.min((op.end_line ?? lines.length) - 1, lines.length - 1)
+
+										// Get the content before and after the target section
+										const beforeLines = lines.slice(0, startLine)
+										const afterLines = lines.slice(endLine + 1)
+
+										// Get the target section and perform replacement
+										const targetContent = lines.slice(startLine, endLine + 1).join("\n")
+										const modifiedContent = targetContent.replace(searchPattern, op.replace)
+										const modifiedLines = modifiedContent.split("\n")
+
+										// Reconstruct the full content with the modified section
+										lines = [...beforeLines, ...modifiedLines, ...afterLines]
+									} else {
+										// Global replacement
+										const fullContent = lines.join("\n")
+										const modifiedContent = fullContent.replace(searchPattern, op.replace)
+										lines = modifiedContent.split("\n")
+									}
+								}
+
+								const newContent = lines.join("\n")
+
+								this.consecutiveMistakeCount = 0
+
+								// Show diff preview
+								const diff = formatResponse.createPrettyPatch(relPath, fileContent, newContent)
+
+								if (!diff) {
+									pushToolResult(`No changes needed for '${relPath}'`)
+									break
+								}
+
+								await this.diffViewProvider.open(relPath)
+								await this.diffViewProvider.update(newContent, true)
+								this.diffViewProvider.scrollToFirstDiff()
+
+								const completeMessage = JSON.stringify({
+									...sharedMessageProps,
+									diff: diff,
+								} satisfies ClineSayTool)
+
+								const didApprove = await askApproval("tool", completeMessage)
+								if (!didApprove) {
+									await this.diffViewProvider.revertChanges() // This likely handles closing the diff view
+									break
+								}
+
+								const { newProblemsMessage, userEdits, finalContent } =
+									await this.diffViewProvider.saveChanges()
+								this.didEditFile = true // used to determine if we should wait for busy terminal to update before sending api request
+								if (userEdits) {
+									await this.say(
+										"user_feedback_diff",
+										JSON.stringify({
+											tool: fileExists ? "editedExistingFile" : "newFileCreated",
+											path: getReadablePath(cwd, relPath),
+											diff: userEdits,
+										} satisfies ClineSayTool),
+									)
+									pushToolResult(
+										`The user made the following updates to your content:\n\n${userEdits}\n\n` +
+											`The updated content, which includes both your original modifications and the user's edits, has been successfully saved to ${relPath.toPosix()}. Here is the full, updated content of the file, including line numbers:\n\n` +
+											`<final_file_content path="${relPath.toPosix()}">\n${addLineNumbers(finalContent || "")}\n</final_file_content>\n\n` +
+											`Please note:\n` +
+											`1. You do not need to re-write the file with these changes, as they have already been applied.\n` +
+											`2. Proceed with the task using this updated file content as the new baseline.\n` +
+											`3. If the user's edits have addressed part of the task or changed the requirements, adjust your approach accordingly.` +
+											`${newProblemsMessage}`,
+									)
+								} else {
+									pushToolResult(
+										`Changes successfully applied to ${relPath.toPosix()}:\n\n${newProblemsMessage}`,
+									)
+								}
+								await this.diffViewProvider.reset()
+								break
+							}
+						} catch (error) {
+							await handleError("applying search and replace", error)
+							await this.diffViewProvider.reset()
+							break
+						}
+					}
+
 					case "read_file": {
 						const relPath: string | undefined = block.params.path
 						const sharedMessageProps: ClineSayTool = {
@@ -2072,10 +2434,79 @@ export class Cline {
 										targetMode.name
 									} mode${reason ? ` because: ${reason}` : ""}.`,
 								)
+								await delay(500) // delay to allow mode change to take effect before next tool is executed
 								break
 							}
 						} catch (error) {
 							await handleError("switching mode", error)
+							break
+						}
+					}
+
+					case "new_task": {
+						const mode: string | undefined = block.params.mode
+						const message: string | undefined = block.params.message
+						try {
+							if (block.partial) {
+								const partialMessage = JSON.stringify({
+									tool: "newTask",
+									mode: removeClosingTag("mode", mode),
+									message: removeClosingTag("message", message),
+								})
+								await this.ask("tool", partialMessage, block.partial).catch(() => {})
+								break
+							} else {
+								if (!mode) {
+									this.consecutiveMistakeCount++
+									pushToolResult(await this.sayAndCreateMissingParamError("new_task", "mode"))
+									break
+								}
+								if (!message) {
+									this.consecutiveMistakeCount++
+									pushToolResult(await this.sayAndCreateMissingParamError("new_task", "message"))
+									break
+								}
+								this.consecutiveMistakeCount = 0
+
+								// Verify the mode exists
+								const targetMode = getModeBySlug(
+									mode,
+									(await this.providerRef.deref()?.getState())?.customModes,
+								)
+								if (!targetMode) {
+									pushToolResult(formatResponse.toolError(`Invalid mode: ${mode}`))
+									break
+								}
+
+								// Show what we're about to do
+								const toolMessage = JSON.stringify({
+									tool: "newTask",
+									mode: targetMode.name,
+									content: message,
+								})
+
+								const didApprove = await askApproval("tool", toolMessage)
+								if (!didApprove) {
+									break
+								}
+
+								// Switch mode first, then create new task instance
+								const provider = this.providerRef.deref()
+								if (provider) {
+									await provider.handleModeSwitch(mode)
+									await provider.initClineWithTask(message)
+									pushToolResult(
+										`Successfully created new task in ${targetMode.name} mode with message: ${message}`,
+									)
+								} else {
+									pushToolResult(
+										formatResponse.toolError("Failed to create new task: provider not available"),
+									)
+								}
+								break
+							}
+						} catch (error) {
+							await handleError("creating new task", error)
 							break
 						}
 					}
@@ -2391,6 +2822,10 @@ export class Cline {
 			let reasoningMessage = ""
 			try {
 				for await (const chunk of stream) {
+					if (!chunk) {
+						// Sometimes chunk is undefined, no idea that can cause it, but this workaround seems to fix it
+						continue
+					}
 					switch (chunk.type) {
 						case "reasoning":
 							reasoningMessage += chunk.text
@@ -2713,6 +3148,14 @@ export class Cline {
 		const timeZoneOffsetStr = `${timeZoneOffset >= 0 ? "+" : ""}${timeZoneOffset}:00`
 		details += `\n\n# Current Time\n${formatter.format(now)} (${timeZone}, UTC${timeZoneOffsetStr})`
 
+		// Add context tokens information
+		const { contextTokens } = getApiMetrics(this.clineMessages)
+		const modelInfo = this.api.getModel().info
+		const contextWindow = modelInfo.contextWindow
+		const contextPercentage =
+			contextTokens && contextWindow ? Math.round((contextTokens / contextWindow) * 100) : undefined
+		details += `\n\n# Current Context Size (Tokens)\n${contextTokens ? `${contextTokens.toLocaleString()} (${contextPercentage}%)` : "(Not available)"}`
+
 		// Add current mode and any mode-specific warnings
 		const { mode, customModes } = (await this.providerRef.deref()?.getState()) ?? {}
 		const currentMode = mode ?? defaultModeSlug
@@ -2745,4 +3188,8 @@ export class Cline {
 
 		return `<environment_details>\n${details.trim()}\n</environment_details>`
 	}
+}
+
+function escapeRegExp(string: string): string {
+	return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }

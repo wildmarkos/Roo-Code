@@ -19,6 +19,7 @@ interface OpenRouterApiStreamUsageChunk extends ApiStreamUsageChunk {
 }
 
 import { SingleCompletionHandler } from ".."
+import { convertToR1Format } from "../transform/r1-format"
 
 export class OpenRouterHandler implements ApiHandler, SingleCompletionHandler {
 	private options: ApiHandlerOptions
@@ -41,7 +42,7 @@ export class OpenRouterHandler implements ApiHandler, SingleCompletionHandler {
 		messages: Anthropic.Messages.MessageParam[],
 	): AsyncGenerator<ApiStreamChunk> {
 		// Convert Anthropic messages to OpenAI format
-		const openAiMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+		let openAiMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
 			{ role: "system", content: systemPrompt },
 			...convertToOpenAiMessages(messages),
 		]
@@ -113,10 +114,20 @@ export class OpenRouterHandler implements ApiHandler, SingleCompletionHandler {
 		}
 
 		let temperature = 0
-		switch (this.getModel().id) {
-			case "deepseek/deepseek-r1":
-				// Recommended temperature for DeepSeek reasoning models
-				temperature = 0.6
+		let topP: number | undefined = undefined
+
+		// Handle models based on deepseek-r1
+		if (
+			this.getModel().id.startsWith("deepseek/deepseek-r1") ||
+			this.getModel().id === "perplexity/sonar-reasoning"
+		) {
+			// Recommended temperature for DeepSeek reasoning models
+			temperature = 0.6
+			// DeepSeek highly recommends using user instead of system
+			// role
+			openAiMessages = convertToR1Format([{ role: "user", content: systemPrompt }, ...messages])
+			// Some provider support topP and 0.95 is value that Deepseek used in their benchmarks
+			topP = 0.95
 		}
 
 		// https://openrouter.ai/docs/transforms
@@ -125,6 +136,7 @@ export class OpenRouterHandler implements ApiHandler, SingleCompletionHandler {
 			model: this.getModel().id,
 			max_tokens: maxTokens,
 			temperature: temperature,
+			top_p: topP,
 			messages: openAiMessages,
 			stream: true,
 			include_reasoning: true,

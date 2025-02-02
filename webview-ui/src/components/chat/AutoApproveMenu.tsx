@@ -28,6 +28,8 @@ const AutoApproveMenu = ({ style }: AutoApproveMenuProps) => {
 		setAlwaysAllowBrowser,
 		alwaysAllowMcp,
 		setAlwaysAllowMcp,
+		alwaysAllowModeSwitch,
+		setAlwaysAllowModeSwitch,
 		alwaysApproveResubmit,
 		setAlwaysApproveResubmit,
 		autoApprovalEnabled,
@@ -70,6 +72,14 @@ const AutoApproveMenu = ({ style }: AutoApproveMenuProps) => {
 			shortName: "MCP",
 			enabled: alwaysAllowMcp ?? false,
 			description: "Allows use of configured MCP servers which may modify filesystem or interact with APIs.",
+		},
+		{
+			id: "switchModes",
+			label: "Switch modes & create tasks",
+			shortName: "Modes",
+			enabled: alwaysAllowModeSwitch ?? false,
+			description:
+				"Allows automatic switching between different AI modes and creating new tasks without requiring approval.",
 		},
 		{
 			id: "retryRequests",
@@ -120,6 +130,12 @@ const AutoApproveMenu = ({ style }: AutoApproveMenuProps) => {
 		vscode.postMessage({ type: "alwaysAllowMcp", bool: newValue })
 	}, [alwaysAllowMcp, setAlwaysAllowMcp])
 
+	const handleModeSwitchChange = useCallback(() => {
+		const newValue = !(alwaysAllowModeSwitch ?? false)
+		setAlwaysAllowModeSwitch(newValue)
+		vscode.postMessage({ type: "alwaysAllowModeSwitch", bool: newValue })
+	}, [alwaysAllowModeSwitch, setAlwaysAllowModeSwitch])
+
 	const handleRetryChange = useCallback(() => {
 		const newValue = !(alwaysApproveResubmit ?? false)
 		setAlwaysApproveResubmit(newValue)
@@ -133,6 +149,7 @@ const AutoApproveMenu = ({ style }: AutoApproveMenuProps) => {
 		executeCommands: handleExecuteChange,
 		useBrowser: handleBrowserChange,
 		useMcp: handleMcpChange,
+		switchModes: handleModeSwitchChange,
 		retryRequests: handleRetryChange,
 	}
 

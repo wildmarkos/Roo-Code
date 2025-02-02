@@ -16,21 +16,28 @@ export const TOOL_DISPLAY_NAMES = {
 	ask_followup_question: "ask questions",
 	attempt_completion: "complete tasks",
 	switch_mode: "switch modes",
+	new_task: "create new task",
 } as const
 
 // Define available tool groups
 export const TOOL_GROUPS: Record<string, ToolGroupValues> = {
 	read: ["read_file", "search_files", "list_files", "list_code_definition_names"],
-	edit: ["write_to_file", "apply_diff"],
+	edit: ["write_to_file", "apply_diff", "insert_content", "search_and_replace"],
 	browser: ["browser_action"],
 	command: ["execute_command"],
 	mcp: ["use_mcp_tool", "access_mcp_resource"],
+	modes: ["switch_mode", "new_task"],
 }
 
 export type ToolGroup = keyof typeof TOOL_GROUPS
 
 // Tools that are always available to all modes
-export const ALWAYS_AVAILABLE_TOOLS = ["ask_followup_question", "attempt_completion", "switch_mode"] as const
+export const ALWAYS_AVAILABLE_TOOLS = [
+	"ask_followup_question",
+	"attempt_completion",
+	"switch_mode",
+	"new_task",
+] as const
 
 // Tool name types for type safety
 export type ToolName = keyof typeof TOOL_DISPLAY_NAMES

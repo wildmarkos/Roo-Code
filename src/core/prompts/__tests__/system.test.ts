@@ -11,6 +11,7 @@ import { defaultModeSlug, modes } from "../../../shared/modes"
 import "../../../utils/path"
 import { addCustomInstructions } from "../sections/custom-instructions"
 import * as modesSection from "../sections/modes"
+import { EXPERIMENT_IDS } from "../../../shared/experiments"
 
 // Mock the sections
 jest.mock("../sections/modes", () => ({
@@ -121,6 +122,7 @@ const createMockMcpHub = (): McpHub =>
 
 describe("SYSTEM_PROMPT", () => {
 	let mockMcpHub: McpHub
+	let experiments: Record<string, boolean>
 
 	beforeAll(() => {
 		// Ensure fs mock is properly initialized
@@ -140,6 +142,10 @@ describe("SYSTEM_PROMPT", () => {
 			"/mock/mcp/path",
 		]
 		dirs.forEach((dir) => mockFs._mockDirectories.add(dir))
+		experiments = {
+			[EXPERIMENT_IDS.SEARCH_AND_REPLACE]: false,
+			[EXPERIMENT_IDS.INSERT_BLOCK]: false,
+		}
 	})
 
 	beforeEach(() => {
@@ -164,6 +170,11 @@ describe("SYSTEM_PROMPT", () => {
 			defaultModeSlug, // mode
 			undefined, // customModePrompts
 			undefined, // customModes
+			undefined, // globalCustomInstructions
+			undefined, // preferredLanguage
+			undefined, // diffEnabled
+			experiments,
+			true, // enableMcpServerCreation
 		)
 
 		expect(prompt).toMatchSnapshot()
@@ -179,7 +190,12 @@ describe("SYSTEM_PROMPT", () => {
 			"1280x800", // browserViewportSize
 			defaultModeSlug, // mode
 			undefined, // customModePrompts
-			undefined, // customModes
+			undefined, // customModes,
+			undefined, // globalCustomInstructions
+			undefined, // preferredLanguage
+			undefined, // diffEnabled
+			experiments,
+			true, // enableMcpServerCreation
 		)
 
 		expect(prompt).toMatchSnapshot()
@@ -197,7 +213,12 @@ describe("SYSTEM_PROMPT", () => {
 			undefined, // browserViewportSize
 			defaultModeSlug, // mode
 			undefined, // customModePrompts
-			undefined, // customModes
+			undefined, // customModes,
+			undefined, // globalCustomInstructions
+			undefined, // preferredLanguage
+			undefined, // diffEnabled
+			experiments,
+			true, // enableMcpServerCreation
 		)
 
 		expect(prompt).toMatchSnapshot()
@@ -213,7 +234,12 @@ describe("SYSTEM_PROMPT", () => {
 			undefined, // browserViewportSize
 			defaultModeSlug, // mode
 			undefined, // customModePrompts
-			undefined, // customModes
+			undefined, // customModes,
+			undefined, // globalCustomInstructions
+			undefined, // preferredLanguage
+			undefined, // diffEnabled
+			experiments,
+			true, // enableMcpServerCreation
 		)
 
 		expect(prompt).toMatchSnapshot()
@@ -229,7 +255,12 @@ describe("SYSTEM_PROMPT", () => {
 			"900x600", // different viewport size
 			defaultModeSlug, // mode
 			undefined, // customModePrompts
-			undefined, // customModes
+			undefined, // customModes,
+			undefined, // globalCustomInstructions
+			undefined, // preferredLanguage
+			undefined, // diffEnabled
+			experiments,
+			true, // enableMcpServerCreation
 		)
 
 		expect(prompt).toMatchSnapshot()
@@ -249,6 +280,8 @@ describe("SYSTEM_PROMPT", () => {
 			undefined, // globalCustomInstructions
 			undefined, // preferredLanguage
 			true, // diffEnabled
+			experiments,
+			true, // enableMcpServerCreation
 		)
 
 		expect(prompt).toContain("apply_diff")
@@ -269,6 +302,8 @@ describe("SYSTEM_PROMPT", () => {
 			undefined, // globalCustomInstructions
 			undefined, // preferredLanguage
 			false, // diffEnabled
+			experiments,
+			true, // enableMcpServerCreation
 		)
 
 		expect(prompt).not.toContain("apply_diff")
@@ -289,6 +324,8 @@ describe("SYSTEM_PROMPT", () => {
 			undefined, // globalCustomInstructions
 			undefined, // preferredLanguage
 			undefined, // diffEnabled
+			experiments,
+			true, // enableMcpServerCreation
 		)
 
 		expect(prompt).not.toContain("apply_diff")
@@ -308,6 +345,9 @@ describe("SYSTEM_PROMPT", () => {
 			undefined, // customModes
 			undefined, // globalCustomInstructions
 			"Spanish", // preferredLanguage
+			undefined, // diffEnabled
+			experiments,
+			true, // enableMcpServerCreation
 		)
 
 		expect(prompt).toContain("Language Preference:")
@@ -337,6 +377,10 @@ describe("SYSTEM_PROMPT", () => {
 			undefined, // customModePrompts
 			customModes, // customModes
 			"Global instructions", // globalCustomInstructions
+			undefined, // preferredLanguage
+			undefined, // diffEnabled
+			experiments,
+			true, // enableMcpServerCreation
 		)
 
 		// Role definition should be at the top
@@ -368,6 +412,11 @@ describe("SYSTEM_PROMPT", () => {
 			defaultModeSlug,
 			customModePrompts,
 			undefined,
+			undefined,
+			undefined,
+			undefined,
+			experiments,
+			true, // enableMcpServerCreation
 		)
 
 		// Role definition from promptComponent should be at the top
@@ -394,10 +443,157 @@ describe("SYSTEM_PROMPT", () => {
 			defaultModeSlug,
 			customModePrompts,
 			undefined,
+			undefined,
+			undefined,
+			undefined,
+			experiments,
+			true, // enableMcpServerCreation
 		)
 
 		// Should use the default mode's role definition
 		expect(prompt.indexOf(modes[0].roleDefinition)).toBeLessThan(prompt.indexOf("TOOL USE"))
+	})
+
+	describe("experimental tools", () => {
+		it("should disable experimental tools by default", async () => {
+			const prompt = await SYSTEM_PROMPT(
+				mockContext,
+				"/test/path",
+				false, // supportsComputerUse
+				undefined, // mcpHub
+				undefined, // diffStrategy
+				undefined, // browserViewportSize
+				defaultModeSlug, // mode
+				undefined, // customModePrompts
+				undefined, // customModes
+				undefined, // globalCustomInstructions
+				undefined, // preferredLanguage
+				undefined, // diffEnabled
+				experiments, // experiments - undefined should disable all experimental tools
+				true, // enableMcpServerCreation
+			)
+
+			// Verify experimental tools are not included in the prompt
+			expect(prompt).not.toContain(EXPERIMENT_IDS.SEARCH_AND_REPLACE)
+			expect(prompt).not.toContain(EXPERIMENT_IDS.INSERT_BLOCK)
+		})
+
+		it("should enable experimental tools when explicitly enabled", async () => {
+			const experiments = {
+				[EXPERIMENT_IDS.SEARCH_AND_REPLACE]: true,
+				[EXPERIMENT_IDS.INSERT_BLOCK]: true,
+			}
+
+			const prompt = await SYSTEM_PROMPT(
+				mockContext,
+				"/test/path",
+				false, // supportsComputerUse
+				undefined, // mcpHub
+				undefined, // diffStrategy
+				undefined, // browserViewportSize
+				defaultModeSlug, // mode
+				undefined, // customModePrompts
+				undefined, // customModes
+				undefined, // globalCustomInstructions
+				undefined, // preferredLanguage
+				undefined, // diffEnabled
+				experiments,
+				true, // enableMcpServerCreation
+			)
+
+			// Verify experimental tools are included in the prompt when enabled
+			expect(prompt).toContain(EXPERIMENT_IDS.SEARCH_AND_REPLACE)
+			expect(prompt).toContain(EXPERIMENT_IDS.INSERT_BLOCK)
+		})
+
+		it("should selectively enable experimental tools", async () => {
+			const experiments = {
+				[EXPERIMENT_IDS.SEARCH_AND_REPLACE]: true,
+				[EXPERIMENT_IDS.INSERT_BLOCK]: false,
+			}
+
+			const prompt = await SYSTEM_PROMPT(
+				mockContext,
+				"/test/path",
+				false, // supportsComputerUse
+				undefined, // mcpHub
+				undefined, // diffStrategy
+				undefined, // browserViewportSize
+				defaultModeSlug, // mode
+				undefined, // customModePrompts
+				undefined, // customModes
+				undefined, // globalCustomInstructions
+				undefined, // preferredLanguage
+				undefined, // diffEnabled
+				experiments,
+				true, // enableMcpServerCreation
+			)
+
+			// Verify only enabled experimental tools are included
+			expect(prompt).toContain(EXPERIMENT_IDS.SEARCH_AND_REPLACE)
+			expect(prompt).not.toContain(EXPERIMENT_IDS.INSERT_BLOCK)
+		})
+
+		it("should list all available editing tools in base instruction", async () => {
+			const experiments = {
+				[EXPERIMENT_IDS.SEARCH_AND_REPLACE]: true,
+				[EXPERIMENT_IDS.INSERT_BLOCK]: true,
+			}
+
+			const prompt = await SYSTEM_PROMPT(
+				mockContext,
+				"/test/path",
+				false,
+				undefined,
+				new SearchReplaceDiffStrategy(),
+				undefined,
+				defaultModeSlug,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				true, // diffEnabled
+				experiments,
+				true, // enableMcpServerCreation
+			)
+
+			// Verify base instruction lists all available tools
+			expect(prompt).toContain("apply_diff (for replacing lines in existing files)")
+			expect(prompt).toContain("write_to_file (for creating new files or complete file rewrites)")
+			expect(prompt).toContain("insert_content (for adding lines to existing files)")
+			expect(prompt).toContain("search_and_replace (for finding and replacing individual pieces of text)")
+		})
+
+		it("should provide detailed instructions for each enabled tool", async () => {
+			const experiments = {
+				[EXPERIMENT_IDS.SEARCH_AND_REPLACE]: true,
+				[EXPERIMENT_IDS.INSERT_BLOCK]: true,
+			}
+
+			const prompt = await SYSTEM_PROMPT(
+				mockContext,
+				"/test/path",
+				false,
+				undefined,
+				new SearchReplaceDiffStrategy(),
+				undefined,
+				defaultModeSlug,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				true,
+				experiments,
+				true, // enableMcpServerCreation
+			)
+
+			// Verify detailed instructions for each tool
+			expect(prompt).toContain(
+				"You should always prefer using other editing tools over write_to_file when making changes to existing files since write_to_file is much slower and cannot handle large files.",
+			)
+			expect(prompt).toContain("The insert_content tool adds lines of text to files")
+			expect(prompt).toContain("The search_and_replace tool finds and replaces text or regex in files")
+		})
 	})
 
 	afterAll(() => {
@@ -406,6 +602,7 @@ describe("SYSTEM_PROMPT", () => {
 })
 
 describe("addCustomInstructions", () => {
+	let experiments: Record<string, boolean>
 	beforeAll(() => {
 		// Ensure fs mock is properly initialized
 		const mockFs = jest.requireMock("fs/promises")
@@ -417,6 +614,11 @@ describe("addCustomInstructions", () => {
 			}
 			throw new Error(`ENOENT: no such file or directory, mkdir '${path}'`)
 		})
+
+		experiments = {
+			[EXPERIMENT_IDS.SEARCH_AND_REPLACE]: false,
+			[EXPERIMENT_IDS.INSERT_BLOCK]: false,
+		}
 	})
 
 	beforeEach(() => {
@@ -434,6 +636,11 @@ describe("addCustomInstructions", () => {
 			"architect", // mode
 			undefined, // customModePrompts
 			undefined, // customModes
+			undefined,
+			undefined,
+			undefined,
+			experiments,
+			true, // enableMcpServerCreation
 		)
 
 		expect(prompt).toMatchSnapshot()
@@ -450,8 +657,61 @@ describe("addCustomInstructions", () => {
 			"ask", // mode
 			undefined, // customModePrompts
 			undefined, // customModes
+			undefined,
+			undefined,
+			undefined,
+			experiments,
+			true, // enableMcpServerCreation
 		)
 
+		expect(prompt).toMatchSnapshot()
+	})
+
+	it("should include MCP server creation info when enabled", async () => {
+		const mockMcpHub = createMockMcpHub()
+
+		const prompt = await SYSTEM_PROMPT(
+			mockContext,
+			"/test/path",
+			false, // supportsComputerUse
+			mockMcpHub, // mcpHub
+			undefined, // diffStrategy
+			undefined, // browserViewportSize
+			defaultModeSlug, // mode
+			undefined, // customModePrompts
+			undefined, // customModes,
+			undefined, // globalCustomInstructions
+			undefined, // preferredLanguage
+			undefined, // diffEnabled
+			experiments,
+			true, // enableMcpServerCreation
+		)
+
+		expect(prompt).toContain("Creating an MCP Server")
+		expect(prompt).toMatchSnapshot()
+	})
+
+	it("should exclude MCP server creation info when disabled", async () => {
+		const mockMcpHub = createMockMcpHub()
+
+		const prompt = await SYSTEM_PROMPT(
+			mockContext,
+			"/test/path",
+			false, // supportsComputerUse
+			mockMcpHub, // mcpHub
+			undefined, // diffStrategy
+			undefined, // browserViewportSize
+			defaultModeSlug, // mode
+			undefined, // customModePrompts
+			undefined, // customModes,
+			undefined, // globalCustomInstructions
+			undefined, // preferredLanguage
+			undefined, // diffEnabled
+			experiments,
+			false, // enableMcpServerCreation
+		)
+
+		expect(prompt).not.toContain("Creating an MCP Server")
 		expect(prompt).toMatchSnapshot()
 	})
 
