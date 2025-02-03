@@ -179,7 +179,7 @@ export class BrowserSession {
 		})
 		let screenshot = `data:image/webp;base64,${screenshotBase64}`
 
-		if (!screenshotBase64) {
+		if (!screenshotBase64 || screenshotBase64.length === 0) {
 			console.log("webp screenshot failed, trying png")
 			screenshotBase64 = await this.page.screenshot({
 				...options,
