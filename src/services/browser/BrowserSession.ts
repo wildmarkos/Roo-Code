@@ -21,6 +21,7 @@ export class BrowserSession {
 	private currentMousePosition?: string
 	private sessionTimeout?: NodeJS.Timeout
 	private readonly SESSION_TIMEOUT = 30 * 60 * 1000 // 30 minutes
+	private viewportSize: string = "900x600" // Default viewport size
 
 	constructor(context: vscode.ExtensionContext) {
 		this.context = context
@@ -87,9 +88,7 @@ export class BrowserSession {
 				],
 				executablePath: stats.executablePath,
 				defaultViewport: (() => {
-					const size =
-						(this.context.globalState.get("browserViewportSize") as string | undefined) || "900x600"
-					const [width, height] = size.split("x").map(Number)
+					const [width, height] = this.viewportSize.split("x").map(Number)
 					return { width, height }
 				})(),
 				// headless: false,
@@ -287,8 +286,7 @@ export class BrowserSession {
 	}
 
 	async scrollDown(): Promise<BrowserActionResult> {
-		const size = ((await this.context.globalState.get("browserViewportSize")) as string | undefined) || "900x600"
-		const height = parseInt(size.split("x")[1])
+		const height = parseInt(this.viewportSize.split("x")[1])
 		return this.doAction(async (page) => {
 			await page.evaluate((scrollHeight) => {
 				window.scrollBy({
@@ -301,8 +299,7 @@ export class BrowserSession {
 	}
 
 	async scrollUp(): Promise<BrowserActionResult> {
-		const size = ((await this.context.globalState.get("browserViewportSize")) as string | undefined) || "900x600"
-		const height = parseInt(size.split("x")[1])
+		const height = parseInt(this.viewportSize.split("x")[1])
 		return this.doAction(async (page) => {
 			await page.evaluate((scrollHeight) => {
 				window.scrollBy({
@@ -312,5 +309,31 @@ export class BrowserSession {
 			}, height)
 			await delay(300)
 		})
+	}
+
+	private onViewportChange?: (viewport: string) => void
+
+	setOnViewportChange(callback: (viewport: string) => void) {
+		this.onViewportChange = callback
+	}
+
+	async setViewport(viewport: string): Promise<BrowserActionResult> {
+		// Update the instance viewport size
+		this.viewportSize = viewport
+
+		// Notify Cline of the viewport change
+		this.onViewportChange?.(viewport)
+
+		// Use doAction to update viewport and capture screenshot
+		return this.doAction(async (page) => {
+			const [width, height] = viewport.split("x").map(Number)
+			await page.setViewport({ width, height })
+			// Small delay to let the page adjust
+			await delay(300)
+		})
+	}
+
+	getViewportSize(): string {
+		return this.viewportSize
 	}
 }

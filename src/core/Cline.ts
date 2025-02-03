@@ -1,6 +1,6 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import cloneDeep from "clone-deep"
-import { DiffStrategy, getDiffStrategy, UnifiedDiffStrategy } from "./diff/DiffStrategy"
+import { DiffStrategy, getDiffStrategy } from "./diff/DiffStrategy"
 import { validateToolUse, isToolAllowedForMode, ToolName } from "./mode-validator"
 import delay from "delay"
 import fs from "fs/promises"
@@ -9,7 +9,7 @@ import pWaitFor from "p-wait-for"
 import * as path from "path"
 import { serializeError } from "serialize-error"
 import * as vscode from "vscode"
-import { ApiHandler, SingleCompletionHandler, buildApiHandler } from "../api"
+import { ApiHandler, buildApiHandler } from "../api"
 import { ApiStream } from "../api/transform/stream"
 import { DiffViewProvider } from "../integrations/editor/DiffViewProvider"
 import { findToolName, formatContentBlockToMarkdown } from "../integrations/misc/export-markdown"
@@ -52,12 +52,11 @@ import { parseMentions } from "./mentions"
 import { AssistantMessageContent, parseAssistantMessage, ToolParamName, ToolUseName } from "./assistant-message"
 import { formatResponse } from "./prompts/responses"
 import { SYSTEM_PROMPT } from "./prompts/system"
-import { modes, defaultModeSlug, getModeBySlug } from "../shared/modes"
+import { defaultModeSlug, getModeBySlug } from "../shared/modes"
 import { truncateHalfConversation } from "./sliding-window"
 import { ClineProvider, GlobalFileNames } from "./webview/ClineProvider"
 import { detectCodeOmission } from "../integrations/editor/detect-omission"
 import { BrowserSession } from "../services/browser/BrowserSession"
-import { OpenRouterHandler } from "../api/providers/openrouter"
 import { McpHub } from "../services/mcp/McpHub"
 import crypto from "crypto"
 import { insertGroups } from "./diff/insert-groups"
@@ -82,6 +81,7 @@ export class Cline {
 	diffStrategy?: DiffStrategy
 	diffEnabled: boolean = false
 	fuzzyMatchThreshold: number = 1.0
+	browserViewportSize: string = "900x600" // Default viewport size
 
 	apiConversationHistory: (Anthropic.MessageParam & { ts?: number })[] = []
 	clineMessages: ClineMessage[] = []
@@ -129,11 +129,25 @@ export class Cline {
 		this.terminalManager = new TerminalManager()
 		this.urlContentFetcher = new UrlContentFetcher(provider.context)
 		this.browserSession = new BrowserSession(provider.context)
+		this.browserSession.setOnViewportChange((viewport) => {
+			this.browserViewportSize = viewport
+		})
 		this.customInstructions = customInstructions
 		this.diffEnabled = enableDiff ?? false
 		this.fuzzyMatchThreshold = fuzzyMatchThreshold ?? 1.0
 		this.providerRef = new WeakRef(provider)
 		this.diffViewProvider = new DiffViewProvider(cwd)
+
+		// Initialize browserViewportSize from state if available
+		provider
+			.getState()
+			.then((state) => {
+				if (state?.browserViewportSize) {
+					this.browserViewportSize = state.browserViewportSize
+					this.browserSession.setViewport(state.browserViewportSize).catch(console.error)
+				}
+			})
+			.catch(console.error)
 
 		if (historyItem) {
 			this.taskId = historyItem.id
@@ -842,14 +856,8 @@ export class Cline {
 			})
 		}
 
-		const {
-			browserViewportSize,
-			mode,
-			customModePrompts,
-			preferredLanguage,
-			experiments,
-			enableMcpServerCreation,
-		} = (await this.providerRef.deref()?.getState()) ?? {}
+		const { mode, customModePrompts, preferredLanguage, experiments, enableMcpServerCreation } =
+			(await this.providerRef.deref()?.getState()) ?? {}
 		const { customModes } = (await this.providerRef.deref()?.getState()) ?? {}
 		const systemPrompt = await (async () => {
 			const provider = this.providerRef.deref()
@@ -862,7 +870,7 @@ export class Cline {
 				this.api.getModel().info.supportsComputerUse ?? false,
 				mcpHub,
 				this.diffStrategy,
-				browserViewportSize,
+				this.browserViewportSize,
 				mode,
 				customModePrompts,
 				customModes,
@@ -2050,7 +2058,10 @@ export class Cline {
 								}
 								break
 							} else {
-								let browserActionResult: BrowserActionResult
+								let browserActionResult: BrowserActionResult = {
+									logs: "",
+									screenshot: undefined,
+								}
 								if (action === "launch") {
 									if (!url) {
 										this.consecutiveMistakeCount++
@@ -2120,6 +2131,31 @@ export class Cline {
 										case "scroll_up":
 											browserActionResult = await this.browserSession.scrollUp()
 											break
+										case "set_viewport":
+											const viewport: string | undefined = block.params.viewport
+											if (!viewport) {
+												this.consecutiveMistakeCount++
+												pushToolResult(
+													await this.sayAndCreateMissingParamError(
+														"browser_action",
+														"viewport",
+													),
+												)
+												await this.browserSession.closeBrowser()
+												break
+											}
+											if (!viewport.match(/^\d+x\d+$/)) {
+												this.consecutiveMistakeCount++
+												pushToolResult(
+													formatResponse.toolError(
+														"Invalid viewport format. Must be in format 'widthxheight' (e.g. '375x667')",
+													),
+												)
+												await this.browserSession.closeBrowser()
+												break
+											}
+											browserActionResult = await this.browserSession.setViewport(viewport)
+											break
 										case "close":
 											browserActionResult = await this.browserSession.closeBrowser()
 											break
@@ -2132,6 +2168,7 @@ export class Cline {
 									case "type":
 									case "scroll_down":
 									case "scroll_up":
+									case "set_viewport":
 										await this.say("browser_action_result", JSON.stringify(browserActionResult))
 										pushToolResult(
 											formatResponse.toolResult(
