@@ -506,8 +506,8 @@ const SettingsView = ({ onDone }: SettingsViewProps) => {
 								marginTop: "5px",
 								color: "var(--vscode-descriptionForeground)",
 							}}>
-							Select the viewport size for browser interactions. This affects how websites are displayed
-							and interacted with.
+							Default viewport size for new browser sessions. Can be temporarily changed during a session
+							using browser actions.
 						</p>
 					</div>
 
