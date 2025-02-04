@@ -1,7 +1,7 @@
 import { BrowserSession } from "../BrowserSession"
 import * as vscode from "vscode"
 import { Browser, Page, TimeoutError, Viewport } from "puppeteer-core"
-import { BrowserActionResult } from "../../../shared/ExtensionMessage"
+// @ts-ignore
 import PCR from "puppeteer-chromium-resolver"
 import fs from "fs/promises"
 
