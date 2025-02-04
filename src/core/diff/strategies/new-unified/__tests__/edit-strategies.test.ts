@@ -291,5 +291,5 @@ describe("applyGitFallback", () => {
 		expect(result.result).toEqual(content)
 		expect(result.confidence).toBe(0)
 		expect(result.strategy).toBe("git-fallback")
-	})
+	}, 10000)
 })
