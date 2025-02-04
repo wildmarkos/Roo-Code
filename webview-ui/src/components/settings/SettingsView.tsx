@@ -479,8 +479,8 @@ const SettingsView = ({ onDone }: SettingsViewProps) => {
 							<span style={{ fontWeight: "500" }}>Keep browser open between actions</span>
 						</VSCodeCheckbox>
 						<p style={{ fontSize: "12px", marginTop: "5px", color: "var(--vscode-descriptionForeground)" }}>
-							When enabled, the browser will stay open between actions during web development tasks,
-							improving performance. The browser will still close after 30 minutes of inactivity.
+							Keeps browser session active between actions for faster web development. Auto-closes after
+							30 minutes of inactivity.
 						</p>
 					</div>
 					<div style={{ marginBottom: 15 }}>
