@@ -1431,8 +1431,7 @@ export const ApiOptions = ({ apiErrorMessage, modelIdErrorMessage }: ApiOptionsP
 				selectedProvider !== "openrouter" &&
 				selectedProvider !== "openai" &&
 				selectedProvider !== "ollama" &&
-				selectedProvider !== "lmstudio" &&
-				selectedProvider !== "vscode-lm" && (
+				selectedProvider !== "lmstudio" && (
 					<>
 						<div className="dropdown-container mt-1">
 							<label htmlFor="model-id">
