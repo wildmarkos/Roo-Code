@@ -11,7 +11,8 @@ import { serializeError } from "serialize-error"
 import * as vscode from "vscode"
 import { ApiHandler, buildApiHandler } from "../api"
 import { ApiStream } from "../api/transform/stream"
-import { DiffViewProvider } from "../integrations/editor/DiffViewProvider"
+import { DIFF_VIEW_URI_SCHEME, DiffViewProvider } from "../integrations/editor/DiffViewProvider"
+import { CheckpointService } from "../services/checkpoints/CheckpointService"
 import { findToolName, formatContentBlockToMarkdown } from "../integrations/misc/export-markdown"
 import {
 	extractTextFromFile,
@@ -52,8 +53,8 @@ import { parseMentions } from "./mentions"
 import { AssistantMessageContent, parseAssistantMessage, ToolParamName, ToolUseName } from "./assistant-message"
 import { formatResponse } from "./prompts/responses"
 import { SYSTEM_PROMPT } from "./prompts/system"
-import { modes, defaultModeSlug, getModeBySlug, parseSlashCommand } from "../shared/modes"
-import { truncateHalfConversation } from "./sliding-window"
+import { modes, defaultModeSlug, getModeBySlug } from "../shared/modes"
+import { truncateConversationIfNeeded } from "./sliding-window"
 import { ClineProvider, GlobalFileNames } from "./webview/ClineProvider"
 import { detectCodeOmission } from "../integrations/editor/detect-omission"
 import { BrowserSession } from "../services/browser/BrowserSession"
@@ -76,29 +77,6 @@ export class Cline {
 	private terminalManager: TerminalManager
 	private urlContentFetcher: UrlContentFetcher
 	private browserSession: BrowserSession
-
-	/**
-	 * Processes a message for slash commands and handles mode switching if needed.
-	 * @param message The message to process
-	 * @returns The processed message with slash command removed if one was present
-	 */
-	private async handleSlashCommand(message: string): Promise<string> {
-		if (!message) return message
-
-		const { customModes } = (await this.providerRef.deref()?.getState()) ?? {}
-		const slashCommand = parseSlashCommand(message, customModes)
-
-		if (slashCommand) {
-			// Switch mode before processing the remaining message
-			const provider = this.providerRef.deref()
-			if (provider) {
-				await provider.handleModeSwitch(slashCommand.modeSlug)
-				return slashCommand.remainingMessage
-			}
-		}
-
-		return message
-	}
 	private didEditFile: boolean = false
 	customInstructions?: string
 	diffStrategy?: DiffStrategy
@@ -116,12 +94,19 @@ export class Cline {
 	private consecutiveMistakeCountForApplyDiff: Map<string, number> = new Map()
 	private providerRef: WeakRef<ClineProvider>
 	private abort: boolean = false
-	didFinishAborting = false
+	didFinishAbortingStream = false
 	abandoned = false
 	private diffViewProvider: DiffViewProvider
 	private lastApiRequestTime?: number
+	isInitialized = false
+
+	// checkpoints
+	checkpointsEnabled: boolean = false
+	private checkpointService?: CheckpointService
 
 	// streaming
+	isWaitingForFirstChunk = false
+	isStreaming = false
 	private currentStreamingContentIndex = 0
 	private assistantMessageContent: AssistantMessageContent[] = []
 	private presentAssistantMessageLocked = false
@@ -137,6 +122,7 @@ export class Cline {
 		apiConfiguration: ApiConfiguration,
 		customInstructions?: string,
 		enableDiff?: boolean,
+		enableCheckpoints?: boolean,
 		fuzzyMatchThreshold?: number,
 		task?: string | undefined,
 		images?: string[] | undefined,
@@ -160,6 +146,7 @@ export class Cline {
 		this.fuzzyMatchThreshold = fuzzyMatchThreshold ?? 1.0
 		this.providerRef = new WeakRef(provider)
 		this.diffViewProvider = new DiffViewProvider(cwd)
+		this.checkpointsEnabled = enableCheckpoints ?? false
 
 		// Initialize browserViewportSize from state if available
 		provider
@@ -392,17 +379,18 @@ export class Cline {
 	}
 
 	async handleWebviewAskResponse(askResponse: ClineAskResponse, text?: string, images?: string[]) {
-		// Process slash command if present
-		if (text) {
-			text = await this.handleSlashCommand(text)
-		}
-
 		this.askResponse = askResponse
 		this.askResponseText = text
 		this.askResponseImages = images
 	}
 
-	async say(type: ClineSay, text?: string, images?: string[], partial?: boolean): Promise<undefined> {
+	async say(
+		type: ClineSay,
+		text?: string,
+		images?: string[],
+		partial?: boolean,
+		checkpoint?: Record<string, unknown>,
+	): Promise<undefined> {
 		if (this.abort) {
 			throw new Error("Roo Code instance aborted")
 		}
@@ -455,7 +443,7 @@ export class Cline {
 			// this is a new non-partial message, so add it like normal
 			const sayTs = Date.now()
 			this.lastMessageTs = sayTs
-			await this.addToClineMessages({ ts: sayTs, type: "say", say: type, text, images })
+			await this.addToClineMessages({ ts: sayTs, type: "say", say: type, text, images, checkpoint })
 			await this.providerRef.deref()?.postStateToWebview()
 		}
 	}
@@ -479,23 +467,8 @@ export class Cline {
 		this.apiConversationHistory = []
 		await this.providerRef.deref()?.postStateToWebview()
 
-		// Check for slash command if task is provided
-		if (task) {
-			const { customModes } = (await this.providerRef.deref()?.getState()) ?? {}
-			const slashCommand = parseSlashCommand(task, customModes)
-
-			if (slashCommand) {
-				// Switch mode before processing the remaining message
-				const provider = this.providerRef.deref()
-				if (provider) {
-					await provider.handleModeSwitch(slashCommand.modeSlug)
-					// Update task to be just the remaining message
-					task = slashCommand.remainingMessage
-				}
-			}
-		}
-
 		await this.say("text", task, images)
+		this.isInitialized = true
 
 		let imageBlocks: Anthropic.ImageBlockParam[] = formatResponse.imageBlocks(images)
 		await this.initiateTaskLoop([
@@ -535,12 +508,13 @@ export class Cline {
 		await this.overwriteClineMessages(modifiedClineMessages)
 		this.clineMessages = await this.getSavedClineMessages()
 
-		// need to make sure that the api conversation history can be resumed by the api, even if it goes out of sync with cline messages
-
-		let existingApiConversationHistory: Anthropic.Messages.MessageParam[] =
-			await this.getSavedApiConversationHistory()
-
-		// Now present the cline messages to the user and ask if they want to resume
+		// Now present the cline messages to the user and ask if they want to
+		// resume (NOTE: we ran into a bug before where the
+		// apiConversationHistory wouldn't be initialized when opening a old
+		// task, and it was because we were waiting for resume).
+		// This is important in case the user deletes messages without resuming
+		// the task first.
+		this.apiConversationHistory = await this.getSavedApiConversationHistory()
 
 		const lastClineMessage = this.clineMessages
 			.slice()
@@ -564,6 +538,8 @@ export class Cline {
 			askType = "resume_task"
 		}
 
+		this.isInitialized = true
+
 		const { response, text, images } = await this.ask(askType) // calls poststatetowebview
 		let responseText: string | undefined
 		let responseImages: string[] | undefined
@@ -572,6 +548,11 @@ export class Cline {
 			responseText = text
 			responseImages = images
 		}
+
+		// Make sure that the api conversation history can be resumed by the API,
+		// even if it goes out of sync with cline messages.
+		let existingApiConversationHistory: Anthropic.Messages.MessageParam[] =
+			await this.getSavedApiConversationHistory()
 
 		// v2.0 xml tags refactor caveat: since we don't use tools anymore, we need to replace all tool use blocks with a text block since the API disallows conversations with tool uses and no tool schema
 		const conversationWithoutToolBlocks = existingApiConversationHistory.map((message) => {
@@ -764,11 +745,19 @@ export class Cline {
 		}
 	}
 
-	abortTask() {
-		this.abort = true // will stop any autonomously running promises
+	async abortTask() {
+		// Will stop any autonomously running promises.
+		this.abort = true
+
 		this.terminalManager.disposeAll()
 		this.urlContentFetcher.closeBrowser()
 		this.browserSession.closeBrowser()
+
+		// If we're not streaming then `abortStream` (which reverts the diff
+		// view changes) won't be called, so we need to revert the changes here.
+		if (this.isStreaming && this.diffViewProvider.isEditing) {
+			await this.diffViewProvider.revertChanges()
+		}
 	}
 
 	// Tools
@@ -858,29 +847,21 @@ export class Cline {
 		const { mcpEnabled, alwaysApproveResubmit, requestDelaySeconds, rateLimitSeconds } =
 			(await this.providerRef.deref()?.getState()) ?? {}
 
-		let finalDelay = 0
+		let rateLimitDelay = 0
 
 		// Only apply rate limiting if this isn't the first request
 		if (this.lastApiRequestTime) {
 			const now = Date.now()
 			const timeSinceLastRequest = now - this.lastApiRequestTime
 			const rateLimit = rateLimitSeconds || 0
-			const rateLimitDelay = Math.max(0, rateLimit * 1000 - timeSinceLastRequest)
-			finalDelay = rateLimitDelay
+			rateLimitDelay = Math.ceil(Math.max(0, rateLimit * 1000 - timeSinceLastRequest) / 1000)
 		}
 
-		// Add exponential backoff delay for retries
-		if (retryAttempt > 0) {
-			const baseDelay = requestDelaySeconds || 5
-			const exponentialDelay = Math.ceil(baseDelay * Math.pow(2, retryAttempt)) * 1000
-			finalDelay = Math.max(finalDelay, exponentialDelay)
-		}
-
-		if (finalDelay > 0) {
+		// Only show rate limiting message if we're not retrying. If retrying, we'll include the delay there.
+		if (rateLimitDelay > 0 && retryAttempt === 0) {
 			// Show countdown timer
-			for (let i = Math.ceil(finalDelay / 1000); i > 0; i--) {
-				const delayMessage =
-					retryAttempt > 0 ? `Retrying in ${i} seconds...` : `Rate limiting for ${i} seconds...`
+			for (let i = rateLimitDelay; i > 0; i--) {
+				const delayMessage = `Rate limiting for ${i} seconds...`
 				await this.say("api_req_retry_delayed", delayMessage, undefined, true)
 				await delay(1000)
 			}
@@ -890,7 +871,7 @@ export class Cline {
 		this.lastApiRequestTime = Date.now()
 
 		if (mcpEnabled ?? true) {
-			mcpHub = this.providerRef.deref()?.mcpHub
+			mcpHub = this.providerRef.deref()?.getMcpHub()
 			if (!mcpHub) {
 				throw new Error("MCP hub not available")
 			}
@@ -928,18 +909,25 @@ export class Cline {
 
 		// If the previous API request's total token usage is close to the context window, truncate the conversation history to free up space for the new request
 		if (previousApiReqIndex >= 0) {
-			const previousRequest = this.clineMessages[previousApiReqIndex]
-			if (previousRequest && previousRequest.text) {
-				const { tokensIn, tokensOut, cacheWrites, cacheReads }: ClineApiReqInfo = JSON.parse(
-					previousRequest.text,
-				)
-				const totalTokens = (tokensIn || 0) + (tokensOut || 0) + (cacheWrites || 0) + (cacheReads || 0)
-				const contextWindow = this.api.getModel().info.contextWindow || 128_000
-				const maxAllowedSize = Math.max(contextWindow - 40_000, contextWindow * 0.8)
-				if (totalTokens >= maxAllowedSize) {
-					const truncatedMessages = truncateHalfConversation(this.apiConversationHistory)
-					await this.overwriteApiConversationHistory(truncatedMessages)
-				}
+			const previousRequest = this.clineMessages[previousApiReqIndex]?.text
+			if (!previousRequest) return
+
+			const {
+				tokensIn = 0,
+				tokensOut = 0,
+				cacheWrites = 0,
+				cacheReads = 0,
+			}: ClineApiReqInfo = JSON.parse(previousRequest)
+			const totalTokens = tokensIn + tokensOut + cacheWrites + cacheReads
+
+			const trimmedMessages = truncateConversationIfNeeded(
+				this.apiConversationHistory,
+				totalTokens,
+				this.api.getModel().info,
+			)
+
+			if (trimmedMessages !== this.apiConversationHistory) {
+				await this.overwriteApiConversationHistory(trimmedMessages)
 			}
 		}
 
@@ -972,17 +960,21 @@ export class Cline {
 
 		try {
 			// awaiting first chunk to see if it will throw an error
+			this.isWaitingForFirstChunk = true
 			const firstChunk = await iterator.next()
 			yield firstChunk.value
+			this.isWaitingForFirstChunk = false
 		} catch (error) {
 			// note that this api_req_failed ask is unique in that we only present this option if the api hasn't streamed any content yet (ie it fails on the first chunk due), as it would allow them to hit a retry button. However if the api failed mid-stream, it could be in any arbitrary state where some tools may have executed, so that error is handled differently and requires cancelling the task entirely.
 			if (alwaysApproveResubmit) {
 				const errorMsg = error.message ?? "Unknown error"
 				const baseDelay = requestDelaySeconds || 5
 				const exponentialDelay = Math.ceil(baseDelay * Math.pow(2, retryAttempt))
+				// Wait for the greater of the exponential delay or the rate limit delay
+				const finalDelay = Math.max(exponentialDelay, rateLimitDelay)
 
 				// Show countdown timer with exponential backoff
-				for (let i = exponentialDelay; i > 0; i--) {
+				for (let i = finalDelay; i > 0; i--) {
 					await this.say(
 						"api_req_retry_delayed",
 						`${errorMsg}\n\nRetry attempt ${retryAttempt + 1}\nRetrying in ${i} seconds...`,
@@ -1048,6 +1040,9 @@ export class Cline {
 		}
 
 		const block = cloneDeep(this.assistantMessageContent[this.currentStreamingContentIndex]) // need to create copy bc while stream is updating the array, it could be updating the reference block properties too
+
+		let isCheckpointPossible = false
+
 		switch (block.type) {
 			case "text": {
 				if (this.didRejectTool || this.didAlreadyUseTool) {
@@ -1058,7 +1053,7 @@ export class Cline {
 					// (have to do this for partial and complete since sending content in thinking tags to markdown renderer will automatically be removed)
 					// Remove end substrings of <thinking or </thinking (below xml parsing is only for opening tags)
 					// (this is done with the xml parsing below now, but keeping here for reference)
-					// content = content.replace(/<\/?t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?$/, "")
+					// content = content.replace(/<\/?t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?$/, "")
 					// Remove all instances of <thinking> (with optional line break after) and </thinking> (with optional line break before)
 					// - Needs to be separate since we dont want to remove the line break before the first tag
 					// - Needs to happen before the xml parsing below
@@ -1179,6 +1174,10 @@ export class Cline {
 					}
 					// once a tool result has been collected, ignore all other tool uses since we should only ever present one tool result per message
 					this.didAlreadyUseTool = true
+
+					// Flag a checkpoint as possible since we've used a tool
+					// which may have changed the file system.
+					isCheckpointPossible = true
 				}
 
 				const askApproval = async (type: ClineAsk, partialMessage?: string) => {
@@ -2341,7 +2340,8 @@ export class Cline {
 								await this.say("mcp_server_request_started") // same as browser_action_result
 								const toolResult = await this.providerRef
 									.deref()
-									?.mcpHub?.callTool(server_name, tool_name, parsedArguments)
+									?.getMcpHub()
+									?.callTool(server_name, tool_name, parsedArguments)
 
 								// TODO: add progress indicator and ability to parse images and non-text responses
 								const toolResultPretty =
@@ -2409,7 +2409,8 @@ export class Cline {
 								await this.say("mcp_server_request_started")
 								const resourceResult = await this.providerRef
 									.deref()
-									?.mcpHub?.readResource(server_name, uri)
+									?.getMcpHub()
+									?.readResource(server_name, uri)
 								const resourceResultPretty =
 									resourceResult?.contents
 										.map((item) => {
@@ -2727,6 +2728,10 @@ export class Cline {
 				break
 		}
 
+		if (isCheckpointPossible) {
+			await this.checkpointSave()
+		}
+
 		/*
 		Seeing out of bounds is fine, it means that the next too call is being built up and ready to add to assistantMessageContent to present.
 		When you see the UI inactive during this, it means that a tool is breaking without presenting any UI. For example the write_to_file tool was breaking when relpath was undefined, and for invalid relpath it never presented UI.
@@ -2790,6 +2795,13 @@ export class Cline {
 		// get previous api req's index to check token usage and determine if we need to truncate conversation history
 		const previousApiReqIndex = findLastIndex(this.clineMessages, (m) => m.say === "api_req_started")
 
+		// Save checkpoint if this is the first API request.
+		const isFirstRequest = this.clineMessages.filter((m) => m.say === "api_req_started").length === 0
+
+		if (isFirstRequest) {
+			await this.checkpointSave()
+		}
+
 		// getting verbose details is an expensive operation, it uses globby to top-down build file structure of project which for large projects can take a few seconds
 		// for the best UX we show a placeholder api_req_started message with a loading spinner as this happens
 		await this.say(
@@ -2847,6 +2859,8 @@ export class Cline {
 			}
 
 			const abortStream = async (cancelReason: ClineApiReqCancelReason, streamingFailedMessage?: string) => {
+				console.log(`[Cline#abortStream] cancelReason = ${cancelReason}`)
+
 				if (this.diffViewProvider.isEditing) {
 					await this.diffViewProvider.revertChanges() // closes diff view
 				}
@@ -2883,7 +2897,7 @@ export class Cline {
 				await this.saveClineMessages()
 
 				// signals to provider that it can retrieve the saved messages from disk, as abortTask can not be awaited on in nature
-				this.didFinishAborting = true
+				this.didFinishAbortingStream = true
 			}
 
 			// reset streaming state
@@ -2901,6 +2915,7 @@ export class Cline {
 			const stream = this.attemptApiRequest(previousApiReqIndex) // yields only if the first chunk is successful, otherwise will allow the user to retry the request (most likely due to rate limit error, which gets thrown on the first chunk)
 			let assistantMessage = ""
 			let reasoningMessage = ""
+			this.isStreaming = true
 			try {
 				for await (const chunk of stream) {
 					if (!chunk) {
@@ -2933,11 +2948,13 @@ export class Cline {
 					}
 
 					if (this.abort) {
-						console.log("aborting stream...")
+						console.log(`aborting stream, this.abandoned = ${this.abandoned}`)
+
 						if (!this.abandoned) {
 							// only need to gracefully abort if this instance isn't abandoned (sometimes openrouter stream hangs, in which case this would affect future instances of cline)
 							await abortStream("user_cancelled")
 						}
+
 						break // aborts the stream
 					}
 
@@ -2970,6 +2987,8 @@ export class Cline {
 						// await this.providerRef.deref()?.postStateToWebview()
 					}
 				}
+			} finally {
+				this.isStreaming = false
 			}
 
 			// need to call here in case the stream was aborted
@@ -3268,6 +3287,172 @@ export class Cline {
 		}
 
 		return `<environment_details>\n${details.trim()}\n</environment_details>`
+	}
+
+	// Checkpoints
+
+	private async getCheckpointService() {
+		if (!this.checkpointService) {
+			this.checkpointService = await CheckpointService.create({
+				taskId: this.taskId,
+				baseDir: vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath).at(0) ?? "",
+				log: (message) => this.providerRef.deref()?.log(message),
+			})
+		}
+
+		return this.checkpointService
+	}
+
+	public async checkpointDiff({
+		ts,
+		commitHash,
+		mode,
+	}: {
+		ts: number
+		commitHash: string
+		mode: "full" | "checkpoint"
+	}) {
+		if (!this.checkpointsEnabled) {
+			return
+		}
+
+		let previousCommitHash = undefined
+
+		if (mode === "checkpoint") {
+			const previousCheckpoint = this.clineMessages
+				.filter(({ say }) => say === "checkpoint_saved")
+				.sort((a, b) => b.ts - a.ts)
+				.find((message) => message.ts < ts)
+
+			previousCommitHash = previousCheckpoint?.text
+		}
+
+		try {
+			const service = await this.getCheckpointService()
+			const changes = await service.getDiff({ from: previousCommitHash, to: commitHash })
+
+			if (!changes?.length) {
+				vscode.window.showInformationMessage("No changes found.")
+				return
+			}
+
+			await vscode.commands.executeCommand(
+				"vscode.changes",
+				mode === "full" ? "Changes since task started" : "Changes since previous checkpoint",
+				changes.map((change) => [
+					vscode.Uri.file(change.paths.absolute),
+					vscode.Uri.parse(`${DIFF_VIEW_URI_SCHEME}:${change.paths.relative}`).with({
+						query: Buffer.from(change.content.before ?? "").toString("base64"),
+					}),
+					vscode.Uri.parse(`${DIFF_VIEW_URI_SCHEME}:${change.paths.relative}`).with({
+						query: Buffer.from(change.content.after ?? "").toString("base64"),
+					}),
+				]),
+			)
+		} catch (err) {
+			this.providerRef.deref()?.log("[checkpointDiff] disabling checkpoints for this task")
+			this.checkpointsEnabled = false
+		}
+	}
+
+	public async checkpointSave() {
+		if (!this.checkpointsEnabled) {
+			return
+		}
+
+		try {
+			const isFirst = !this.checkpointService
+			const service = await this.getCheckpointService()
+			const commit = await service.saveCheckpoint(`Task: ${this.taskId}, Time: ${Date.now()}`)
+
+			if (commit?.commit) {
+				await this.providerRef
+					.deref()
+					?.postMessageToWebview({ type: "currentCheckpointUpdated", text: service.currentCheckpoint })
+
+				// Checkpoint metadata required by the UI.
+				const checkpoint = {
+					isFirst,
+					from: service.baseCommitHash,
+					to: commit.commit,
+				}
+
+				await this.say("checkpoint_saved", commit.commit, undefined, undefined, checkpoint)
+			}
+		} catch (err) {
+			this.providerRef.deref()?.log("[checkpointSave] disabling checkpoints for this task")
+			this.checkpointsEnabled = false
+		}
+	}
+
+	public async checkpointRestore({
+		ts,
+		commitHash,
+		mode,
+	}: {
+		ts: number
+		commitHash: string
+		mode: "preview" | "restore"
+	}) {
+		if (!this.checkpointsEnabled) {
+			return
+		}
+
+		const index = this.clineMessages.findIndex((m) => m.ts === ts)
+
+		if (index === -1) {
+			return
+		}
+
+		try {
+			const service = await this.getCheckpointService()
+			await service.restoreCheckpoint(commitHash)
+
+			await this.providerRef
+				.deref()
+				?.postMessageToWebview({ type: "currentCheckpointUpdated", text: service.currentCheckpoint })
+
+			if (mode === "restore") {
+				await this.overwriteApiConversationHistory(
+					this.apiConversationHistory.filter((m) => !m.ts || m.ts < ts),
+				)
+
+				const deletedMessages = this.clineMessages.slice(index + 1)
+
+				const { totalTokensIn, totalTokensOut, totalCacheWrites, totalCacheReads, totalCost } = getApiMetrics(
+					combineApiRequests(combineCommandSequences(deletedMessages)),
+				)
+
+				await this.overwriteClineMessages(this.clineMessages.slice(0, index + 1))
+
+				// TODO: Verify that this is working as expected.
+				await this.say(
+					"api_req_deleted",
+					JSON.stringify({
+						tokensIn: totalTokensIn,
+						tokensOut: totalTokensOut,
+						cacheWrites: totalCacheWrites,
+						cacheReads: totalCacheReads,
+						cost: totalCost,
+					} satisfies ClineApiReqInfo),
+				)
+			}
+
+			// The task is already cancelled by the provider beforehand, but we
+			// need to re-init to get the updated messages.
+			//
+			// This was take from Cline's implementation of the checkpoints
+			// feature. The cline instance will hang if we don't cancel twice,
+			// so this is currently necessary, but it seems like a complicated
+			// and hacky solution to a problem that I don't fully understand.
+			// I'd like to revisit this in the future and try to improve the
+			// task flow and the communication between the webview and the
+			// Cline instance.
+			this.providerRef.deref()?.cancelTask()
+		} catch (err) {
+			this.providerRef.deref()?.log("[checkpointRestore] disabling checkpoints for this task")
+			this.checkpointsEnabled = false
+		}
 	}
 }
 

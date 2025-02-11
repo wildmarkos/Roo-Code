@@ -223,9 +223,9 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 								setEnableButtons(false)
 							}
 							break
+						case "api_req_finished":
 						case "task":
 						case "error":
-						case "api_req_finished":
 						case "text":
 						case "browser_action":
 						case "browser_action_result":
@@ -547,6 +547,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 			switch (message.say) {
 				case "api_req_finished": // combineApiRequests removes this from modifiedMessages anyways
 				case "api_req_retried": // this message is used to update the latest api_req_started that the request was retried
+				case "api_req_deleted": // aggregated api_req metrics from deleted messages
 					return false
 				case "api_req_retry_delayed":
 					// Only show the retry message if it's the last message
@@ -878,7 +879,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 
 	const placeholderText = useMemo(() => {
 		const baseText = task ? "Type a message..." : "Type your task here..."
-		const contextText = "(@ to add context"
+		const contextText = "(@ to add context, / to switch modes"
 		const imageText = shouldDisableImages ? "" : ", hold shift to drag in images"
 		const helpText = imageText ? `\n${contextText}${imageText})` : `\n${contextText})`
 		return baseText + helpText
@@ -1123,6 +1124,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 					)}
 				</>
 			)}
+
 			<ChatTextArea
 				ref={textAreaRef}
 				inputValue={inputValue}
@@ -1142,6 +1144,8 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 				mode={mode}
 				setMode={setMode}
 			/>
+
+			<div id="chat-view-portal" />
 		</div>
 	)
 }
