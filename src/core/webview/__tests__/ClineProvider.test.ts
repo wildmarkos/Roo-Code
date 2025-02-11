@@ -342,7 +342,7 @@ describe("ClineProvider", () => {
 			diffEnabled: false,
 			checkpointsEnabled: false,
 			writeDelayMs: 1000,
-			browserViewportSize: "900x600",
+			browserViewportSize: "1280x800",
 			fuzzyMatchThreshold: 1.0,
 			mcpEnabled: true,
 			enableMcpServerCreation: false,
@@ -1021,7 +1021,7 @@ describe("ClineProvider", () => {
 				mode: "code",
 				enableMcpServerCreation: true,
 				mcpEnabled: false,
-				browserViewportSize: "900x600",
+				browserViewportSize: "1280x800",
 				experimentalDiffStrategy: true,
 				diffEnabled: true,
 				fuzzyMatchThreshold: 0.8,
@@ -1046,7 +1046,7 @@ describe("ClineProvider", () => {
 					// diffStrategy
 					getToolDescription: expect.any(Function),
 				}),
-				"900x600", // browserViewportSize
+				"1280x800", // browserViewportSize
 				"code", // mode
 				{}, // customModePrompts
 				{}, // customModes
@@ -1073,7 +1073,7 @@ describe("ClineProvider", () => {
 				customModePrompts: {},
 				mode: "code",
 				mcpEnabled: false,
-				browserViewportSize: "900x600",
+				browserViewportSize: "1280x800",
 				experimentalDiffStrategy: true,
 				diffEnabled: false,
 				fuzzyMatchThreshold: 0.8,
@@ -1099,7 +1099,7 @@ describe("ClineProvider", () => {
 					// diffStrategy
 					getToolDescription: expect.any(Function),
 				}),
-				"900x600", // browserViewportSize
+				"1280x800", // browserViewportSize
 				"code", // mode
 				{}, // customModePrompts
 				{}, // customModes
@@ -1124,7 +1124,7 @@ describe("ClineProvider", () => {
 				mode: "architect",
 				enableMcpServerCreation: false,
 				mcpEnabled: false,
-				browserViewportSize: "900x600",
+				browserViewportSize: "1280x800",
 				experiments: experimentDefault,
 			} as any)
 

@@ -244,7 +244,7 @@ describe("BrowserSession", () => {
 		})
 
 		it("should get current viewport size", () => {
-			expect(browserSession.getViewportSize()).toBe("900x600") // Default size
+			expect(browserSession.getViewportSize()).toBe("1280x800") // Default size
 		})
 	})
 

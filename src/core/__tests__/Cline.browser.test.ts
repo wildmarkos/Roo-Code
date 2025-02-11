@@ -55,7 +55,7 @@ describe("Cline Browser Integration", () => {
 				requestDelaySeconds: 0,
 				screenshotQuality: 75,
 				terminalOutputLineLimit: 1000,
-				browserViewportSize: "900x600", // Default viewport size
+				browserViewportSize: "1280x800", // Default viewport size
 			}),
 			postMessageToWebview: jest.fn(),
 			postStateToWebview: jest.fn(),
@@ -103,7 +103,7 @@ describe("Cline Browser Integration", () => {
 		it("should initialize browser session with default viewport size", async () => {
 			const testCline = await createTestCline()
 			expect(mockBrowserSession.setOnViewportChange).toHaveBeenCalled()
-			expect((testCline as any).browserViewportSize).toBe("900x600") // Default size
+			expect((testCline as any).browserViewportSize).toBe("1280x800") // Default size
 			await testCline.abortTask()
 		})
 

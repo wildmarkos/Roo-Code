@@ -82,7 +82,7 @@ export class Cline {
 	diffStrategy?: DiffStrategy
 	diffEnabled: boolean = false
 	fuzzyMatchThreshold: number = 1.0
-	browserViewportSize: string = "900x600" // Default viewport size
+	browserViewportSize: string = "1280x800" // Default viewport size
 
 	apiConversationHistory: (Anthropic.MessageParam & { ts?: number })[] = []
 	clineMessages: ClineMessage[] = []

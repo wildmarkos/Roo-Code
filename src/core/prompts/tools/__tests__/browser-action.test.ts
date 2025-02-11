@@ -8,7 +8,7 @@ describe("getBrowserActionDescription", () => {
 		defaultArgs = {
 			cwd: "/test/path",
 			supportsComputerUse: true,
-			browserViewportSize: "900x600",
+			browserViewportSize: "1280x800",
 			diffStrategy: undefined,
 			mcpHub: undefined,
 			toolOptions: {},

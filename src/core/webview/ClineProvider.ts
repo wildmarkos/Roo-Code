@@ -1012,7 +1012,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 						await this.postStateToWebview()
 						break
 					case "browserViewportSize":
-						const browserViewportSize = message.text ?? "900x600"
+						const browserViewportSize = message.text ?? "1280x800"
 						await this.updateGlobalState("browserViewportSize", browserViewportSize)
 						await this.postStateToWebview()
 						break
@@ -1534,7 +1534,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 				apiConfiguration.openRouterModelInfo?.supportsComputerUse ?? false,
 				mcpEnabled ? this.mcpHub : undefined,
 				diffStrategy,
-				browserViewportSize ?? "900x600",
+				browserViewportSize ?? "1280x800",
 				mode,
 				customModePrompts,
 				customModes,
@@ -2390,7 +2390,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			shouldShowAnnouncement: lastShownAnnouncementId !== this.latestAnnouncementId,
 			allowedCommands,
 			soundVolume: soundVolume ?? 0.5,
-			browserViewportSize: browserViewportSize ?? "900x600",
+			browserViewportSize: browserViewportSize ?? "1280x800",
 			screenshotQuality: screenshotQuality ?? 75,
 			preferredLanguage: preferredLanguage ?? "English",
 			writeDelayMs: writeDelayMs ?? 1000,
@@ -2705,7 +2705,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			diffEnabled: diffEnabled ?? true,
 			checkpointsEnabled: checkpointsEnabled ?? false,
 			soundVolume,
-			browserViewportSize: browserViewportSize ?? "900x600",
+			browserViewportSize: browserViewportSize ?? "1280x800",
 			screenshotQuality: screenshotQuality ?? 75,
 			fuzzyMatchThreshold: fuzzyMatchThreshold ?? 1.0,
 			writeDelayMs: writeDelayMs ?? 1000,

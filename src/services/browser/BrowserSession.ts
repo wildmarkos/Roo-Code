@@ -21,7 +21,7 @@ export class BrowserSession {
 	private currentMousePosition?: string
 	private sessionTimeout?: NodeJS.Timeout
 	private readonly SESSION_TIMEOUT = 30 * 60 * 1000 // 30 minutes
-	private viewportSize: string = "900x600" // Default viewport size
+	private viewportSize: string = "1280x800" // Default viewport size
 
 	constructor(context: vscode.ExtensionContext) {
 		this.context = context

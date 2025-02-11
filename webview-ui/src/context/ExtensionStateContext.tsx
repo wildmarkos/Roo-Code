@@ -102,7 +102,7 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		fuzzyMatchThreshold: 1.0,
 		preferredLanguage: "English",
 		writeDelayMs: 1000,
-		browserViewportSize: "900x600",
+		browserViewportSize: "1280x800",
 		screenshotQuality: 75,
 		terminalOutputLineLimit: 500,
 		mcpEnabled: true,
