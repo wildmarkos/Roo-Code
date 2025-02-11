@@ -152,6 +152,14 @@ export class BrowserSession {
 		} catch (err) {
 			if (!(err instanceof TimeoutError)) {
 				logs.push(`[Error] ${err.toString()}`)
+				const currentUrl = this.page?.url() || ""
+				await this.closeBrowser()
+				return {
+					screenshot: "",
+					logs: logs.join("\n"),
+					currentUrl,
+					currentMousePosition: this.currentMousePosition,
+				}
 			}
 		}
 
@@ -265,12 +273,14 @@ export class BrowserSession {
 
 			if (hasNetworkActivity) {
 				// If we detected network activity, wait for navigation/loading
-				await page
-					.waitForNavigation({
+				try {
+					await page.waitForNavigation({
 						waitUntil: ["domcontentloaded", "networkidle2"],
 						timeout: 7000,
 					})
-					.catch(() => {})
+				} catch (err) {
+					// Ignore navigation timeout errors
+				}
 				await this.waitTillHTMLStable(page)
 			}
 

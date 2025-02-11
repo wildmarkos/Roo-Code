@@ -15,9 +15,8 @@ describe("Cline Browser Integration", () => {
 	let mockContext: vscode.ExtensionContext
 	let mockProvider: jest.Mocked<ClineProvider>
 	let mockBrowserSession: jest.Mocked<BrowserSession>
-	let cline: Cline
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		// Mock fs.mkdir
 		;(fs.mkdir as jest.Mock).mockResolvedValue(undefined)
 
@@ -56,20 +55,21 @@ describe("Cline Browser Integration", () => {
 				requestDelaySeconds: 0,
 				screenshotQuality: 75,
 				terminalOutputLineLimit: 1000,
+				browserViewportSize: "900x600", // Default viewport size
 			}),
 			postMessageToWebview: jest.fn(),
 			postStateToWebview: jest.fn(),
 			updateTaskHistory: jest.fn(),
 			ensureSettingsDirectoryExists: jest.fn(),
 			ensureMcpServersDirectoryExists: jest.fn(),
+			log: jest.fn(),
+			getMcpHub: jest.fn(),
 		} as unknown as jest.Mocked<ClineProvider>
 
-		// Setup mock browser session with error handling
+		// Setup mock browser session
 		mockBrowserSession = {
 			setOnViewportChange: jest.fn(),
-			closeBrowser: jest.fn().mockImplementation(async () => {
-				return {}
-			}),
+			closeBrowser: jest.fn().mockImplementation(async () => ({})),
 			launchBrowser: jest.fn(),
 			navigateToUrl: jest.fn(),
 			click: jest.fn(),
@@ -83,25 +83,36 @@ describe("Cline Browser Integration", () => {
 		// Mock BrowserSession constructor
 		;(BrowserSession as jest.Mock).mockImplementation(() => mockBrowserSession)
 
+		// Reset browser session mock before each test
+		mockBrowserSession.closeBrowser.mockReset()
+		mockBrowserSession.closeBrowser.mockImplementation(async () => ({}))
+	})
+
+	// Helper function to create a clean Cline instance for each test
+	const createTestCline = async () => {
 		const apiConfig: ApiConfiguration = {
 			apiProvider: "anthropic" as ApiProvider,
 			apiKey: "test-key",
 		}
-
-		// Create Cline instance
-		cline = new Cline(mockProvider, apiConfig, undefined, false, 1.0, "test task")
-	})
+		const instance = new Cline(mockProvider, apiConfig, undefined, false, true, 1.0, "test task")
+		await new Promise((resolve) => setTimeout(resolve, 100)) // Wait for async initialization
+		return instance
+	}
 
 	describe("Browser Session Management", () => {
-		it("should initialize browser session with default viewport size", () => {
+		it("should initialize browser session with default viewport size", async () => {
+			const testCline = await createTestCline()
 			expect(mockBrowserSession.setOnViewportChange).toHaveBeenCalled()
-			expect((cline as any).browserViewportSize).toBe("900x600") // Default size
+			expect((testCline as any).browserViewportSize).toBe("900x600") // Default size
+			await testCline.abortTask()
 		})
 
-		it("should update viewport size when browser session changes it", () => {
+		it("should update viewport size when browser session changes it", async () => {
+			const testCline = await createTestCline()
 			const viewportChangeHandler = mockBrowserSession.setOnViewportChange.mock.calls[0][0]
 			viewportChangeHandler("1024x768")
-			expect((cline as any).browserViewportSize).toBe("1024x768")
+			expect((testCline as any).browserViewportSize).toBe("1024x768")
+			await testCline.abortTask()
 		})
 
 		it("should restore viewport size from provider state", async () => {
@@ -110,15 +121,9 @@ describe("Cline Browser Integration", () => {
 				browserViewportSize: "375x667",
 			})
 
-			const apiConfig: ApiConfiguration = {
-				apiProvider: "anthropic" as ApiProvider,
-				apiKey: "test-key",
-			}
-
-			const newCline = new Cline(mockProvider, apiConfig, undefined, false, 1.0, "test task")
-			await new Promise((resolve) => setTimeout(resolve, 0)) // Wait for async state initialization
-
+			const testCline = await createTestCline()
 			expect(mockBrowserSession.setViewport).toHaveBeenCalledWith("375x667")
+			await testCline.abortTask()
 		})
 	})
 
@@ -142,6 +147,7 @@ describe("Cline Browser Integration", () => {
 		})
 
 		it("should handle browser launch action", async () => {
+			const testCline = await createTestCline()
 			const block = {
 				type: "tool_use" as const,
 				name: "browser_action" as const,
@@ -150,21 +156,26 @@ describe("Cline Browser Integration", () => {
 					url: "http://test.com",
 				},
 			}
+			;(testCline as any).ask = jest.fn().mockResolvedValue({ response: "yesButtonClicked" })
+			;(testCline as any).say = jest.fn()
 
-			// Mock ask method to simulate user approval
-			;(cline as any).ask = jest.fn().mockResolvedValue({ response: "yesButtonClicked" })
-			;(cline as any).say = jest.fn()
-
-			await (cline as any).presentAssistantMessage()
-			await (cline as any).browserSession.launchBrowser()
-			const result = await (cline as any).browserSession.navigateToUrl(block.params.url!)
+			// Launch browser first
+			await (testCline as any).browserSession.launchBrowser()
+			const result = await (testCline as any).browserSession.navigateToUrl(block.params.url!)
 
 			expect(mockBrowserSession.launchBrowser).toHaveBeenCalled()
 			expect(mockBrowserSession.navigateToUrl).toHaveBeenCalledWith("http://test.com")
 			expect(result).toEqual(mockBrowserActionResult)
+
+			// Wait for any pending async operations and cleanup
+			await new Promise((resolve) => setTimeout(resolve, 500))
+			await testCline.abortTask()
+			await new Promise((resolve) => setTimeout(resolve, 100)) // Additional wait for cleanup
+			await testCline.abortTask()
 		})
 
 		it("should handle browser click action", async () => {
+			const testCline = await createTestCline()
 			const block = {
 				type: "tool_use" as const,
 				name: "browser_action" as const,
@@ -173,18 +184,23 @@ describe("Cline Browser Integration", () => {
 					coordinate: "100,200",
 				},
 			}
+			;(testCline as any).ask = jest.fn().mockResolvedValue({ response: "yesButtonClicked" })
+			;(testCline as any).say = jest.fn()
 
-			;(cline as any).ask = jest.fn().mockResolvedValue({ response: "yesButtonClicked" })
-			;(cline as any).say = jest.fn()
-
-			await (cline as any).presentAssistantMessage()
-			const result = await (cline as any).browserSession.click(block.params.coordinate!)
+			const result = await (testCline as any).browserSession.click(block.params.coordinate!)
 
 			expect(mockBrowserSession.click).toHaveBeenCalledWith("100,200")
 			expect(result).toEqual(mockBrowserActionResult)
+
+			// Wait for any pending async operations and cleanup
+			await new Promise((resolve) => setTimeout(resolve, 500))
+			await testCline.abortTask()
+			await new Promise((resolve) => setTimeout(resolve, 100)) // Additional wait for cleanup
+			await testCline.abortTask()
 		})
 
 		it("should handle browser type action", async () => {
+			const testCline = await createTestCline()
 			const block = {
 				type: "tool_use" as const,
 				name: "browser_action" as const,
@@ -194,17 +210,22 @@ describe("Cline Browser Integration", () => {
 				},
 			}
 
-			;(cline as any).ask = jest.fn().mockResolvedValue({ response: "yesButtonClicked" })
-			;(cline as any).say = jest.fn()
+			;(testCline as any).ask = jest.fn().mockResolvedValue({ response: "yesButtonClicked" })
+			;(testCline as any).say = jest.fn()
 
-			await (cline as any).presentAssistantMessage()
-			const result = await (cline as any).browserSession.type(block.params.text!)
+			const result = await (testCline as any).browserSession.type(block.params.text!)
 
 			expect(mockBrowserSession.type).toHaveBeenCalledWith("test text")
 			expect(result).toEqual(mockBrowserActionResult)
+
+			// Wait for any pending async operations and cleanup
+			await new Promise((resolve) => setTimeout(resolve, 500))
+			await testCline.abortTask()
+			await new Promise((resolve) => setTimeout(resolve, 100)) // Additional wait for cleanup
 		})
 
 		it("should handle viewport changes", async () => {
+			const testCline = await createTestCline()
 			const block = {
 				type: "tool_use" as const,
 				name: "browser_action" as const,
@@ -214,17 +235,22 @@ describe("Cline Browser Integration", () => {
 				},
 			}
 
-			;(cline as any).ask = jest.fn().mockResolvedValue({ response: "yesButtonClicked" })
-			;(cline as any).say = jest.fn()
+			;(testCline as any).ask = jest.fn().mockResolvedValue({ response: "yesButtonClicked" })
+			;(testCline as any).say = jest.fn()
 
-			await (cline as any).presentAssistantMessage()
-			const result = await (cline as any).browserSession.setViewport(block.params.viewport!)
+			const result = await (testCline as any).browserSession.setViewport(block.params.viewport!)
 
 			expect(mockBrowserSession.setViewport).toHaveBeenCalledWith("1024x768")
 			expect(result).toEqual(mockBrowserActionResult)
+
+			// Wait for any pending async operations and cleanup
+			await new Promise((resolve) => setTimeout(resolve, 500))
+			await testCline.abortTask()
+			await new Promise((resolve) => setTimeout(resolve, 100)) // Additional wait for cleanup
 		})
 
 		it("should handle browser close action", async () => {
+			const testCline = await createTestCline()
 			const block = {
 				type: "tool_use" as const,
 				name: "browser_action" as const,
@@ -233,91 +259,80 @@ describe("Cline Browser Integration", () => {
 				},
 			}
 
-			;(cline as any).ask = jest.fn().mockResolvedValue({ response: "yesButtonClicked" })
-			;(cline as any).say = jest.fn()
+			;(testCline as any).ask = jest.fn().mockResolvedValue({ response: "yesButtonClicked" })
+			;(testCline as any).say = jest.fn()
 
-			await (cline as any).presentAssistantMessage()
-			await (cline as any).browserSession.closeBrowser()
+			// Launch browser first
+			await (testCline as any).browserSession.launchBrowser()
+			await (testCline as any).browserSession.closeBrowser()
 
 			expect(mockBrowserSession.closeBrowser).toHaveBeenCalled()
+
+			// Wait for any pending async operations and cleanup
+			await new Promise((resolve) => setTimeout(resolve, 500))
+			await testCline.abortTask()
+			await new Promise((resolve) => setTimeout(resolve, 100)) // Additional wait for cleanup
 		})
 	})
 
 	describe("Browser Error Handling", () => {
-		beforeEach(() => {
-			// Reset closeBrowser mock before each test
-			mockBrowserSession.closeBrowser.mockReset()
-			mockBrowserSession.closeBrowser.mockImplementation(async () => ({}))
-		})
-
 		it("should handle browser launch errors", async () => {
 			const error = new Error("Failed to launch browser")
 			mockBrowserSession.launchBrowser.mockRejectedValue(error)
-			;(cline as any).ask = jest.fn().mockResolvedValue({ response: "yesButtonClicked" })
-			;(cline as any).say = jest.fn()
 
-			await (cline as any).presentAssistantMessage()
+			const testCline = await createTestCline()
+			;(testCline as any).ask = jest.fn().mockResolvedValue({ response: "yesButtonClicked" })
+			;(testCline as any).say = jest.fn()
 
-			try {
-				await (cline as any).browserSession.launchBrowser()
-			} catch (e) {
-				expect(e.message).toBe("Failed to launch browser")
-			}
+			const launchPromise = (testCline as any).browserSession.launchBrowser()
 
-			// Wait for error handler to execute
+			await expect(launchPromise).rejects.toThrow("Failed to launch browser")
 			await new Promise((resolve) => setTimeout(resolve, 100))
 			expect(mockBrowserSession.closeBrowser).toHaveBeenCalled()
+
+			await testCline.abortTask()
 		})
 
 		it("should handle navigation errors", async () => {
 			const error = new Error("Failed to navigate")
 			mockBrowserSession.navigateToUrl.mockRejectedValue(error)
-			;(cline as any).ask = jest.fn().mockResolvedValue({ response: "yesButtonClicked" })
-			;(cline as any).say = jest.fn()
 
-			await (cline as any).presentAssistantMessage()
+			const testCline = await createTestCline()
+			;(testCline as any).ask = jest.fn().mockResolvedValue({ response: "yesButtonClicked" })
+			;(testCline as any).say = jest.fn()
 
-			try {
-				await (cline as any).browserSession.navigateToUrl("http://test.com")
-			} catch (e) {
-				expect(e.message).toBe("Failed to navigate")
-			}
+			const navigatePromise = (testCline as any).browserSession.navigateToUrl("http://test.com")
 
-			// Wait for error handler to execute
+			await expect(navigatePromise).rejects.toThrow("Failed to navigate")
 			await new Promise((resolve) => setTimeout(resolve, 100))
 			expect(mockBrowserSession.closeBrowser).toHaveBeenCalled()
+
+			await testCline.abortTask()
 		})
 
 		it("should handle click errors", async () => {
 			const error = new Error("Failed to click")
 			mockBrowserSession.click.mockRejectedValue(error)
-			;(cline as any).ask = jest.fn().mockResolvedValue({ response: "yesButtonClicked" })
-			;(cline as any).say = jest.fn()
 
-			await (cline as any).presentAssistantMessage()
+			const testCline = await createTestCline()
+			;(testCline as any).ask = jest.fn().mockResolvedValue({ response: "yesButtonClicked" })
+			;(testCline as any).say = jest.fn()
 
-			try {
-				await (cline as any).browserSession.click("100,200")
-			} catch (e) {
-				expect(e.message).toBe("Failed to click")
-			}
+			const clickPromise = (testCline as any).browserSession.click("100,200")
 
-			// Wait for error handler to execute
+			await expect(clickPromise).rejects.toThrow("Failed to click")
 			await new Promise((resolve) => setTimeout(resolve, 100))
 			expect(mockBrowserSession.closeBrowser).toHaveBeenCalled()
+
+			await testCline.abortTask()
 		})
 	})
 
 	describe("Task Lifecycle", () => {
 		it("should close browser when task is aborted", async () => {
-			await cline.abortTask()
+			const testCline = await createTestCline()
+			await testCline.abortTask()
 			expect(mockBrowserSession.closeBrowser).toHaveBeenCalled()
 		})
-	})
-
-	afterEach(async () => {
-		await cline.abortTask()
-		// Wait for any pending promises to resolve
-		await new Promise((resolve) => setTimeout(resolve, 100))
 	})
 })
