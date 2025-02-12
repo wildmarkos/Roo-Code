@@ -41,6 +41,8 @@ describe("BrowserSession", () => {
 		mockPage = {
 			goto: jest.fn().mockResolvedValue(undefined),
 			setViewport: jest.fn().mockResolvedValue(undefined),
+			setExtraHTTPHeaders: jest.fn().mockResolvedValue(undefined),
+			setDefaultNavigationTimeout: jest.fn().mockResolvedValue(undefined),
 			screenshot: jest.fn().mockResolvedValue(Buffer.from("mock-screenshot-base64")),
 			mouse: {
 				click: jest.fn(),
@@ -96,7 +98,7 @@ describe("BrowserSession", () => {
 			await Promise.all([
 				mockPuppeteer.launch(),
 				mockBrowser.newPage(),
-				mockPage.setViewport({ width: 900, height: 600 } as Viewport),
+				mockPage.setViewport({ width: 1280, height: 800 } as Viewport),
 			])
 
 			// Verify browser was launched and page was created
@@ -143,8 +145,8 @@ describe("BrowserSession", () => {
 			expect(mockPage.goto).toHaveBeenCalledWith(
 				"http://test.com",
 				expect.objectContaining({
-					timeout: 7_000,
-					waitUntil: ["domcontentloaded", "networkidle2"],
+					timeout: 15_000,
+					waitUntil: "domcontentloaded",
 				}),
 			)
 		})
@@ -244,7 +246,7 @@ describe("BrowserSession", () => {
 		})
 
 		it("should get current viewport size", () => {
-			expect(browserSession.getViewportSize()).toBe("1280x800") // Default size
+			expect(browserSession.getViewportSize()).toBe("900x600") // Default size
 		})
 	})
 

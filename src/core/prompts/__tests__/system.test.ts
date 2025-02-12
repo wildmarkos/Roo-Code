@@ -191,7 +191,7 @@ describe("SYSTEM_PROMPT", () => {
 			true, // supportsComputerUse
 			undefined, // mcpHub
 			undefined, // diffStrategy
-			"1280x800", // browserViewportSize
+			"900x600", // browserViewportSize
 			defaultModeSlug, // mode
 			undefined, // customModePrompts
 			undefined, // customModes,
