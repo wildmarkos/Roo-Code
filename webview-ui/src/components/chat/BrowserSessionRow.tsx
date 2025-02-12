@@ -29,7 +29,7 @@ const BrowserSessionRow = memo((props: BrowserSessionRowProps) => {
 	const [maxActionHeight, setMaxActionHeight] = useState(0)
 	const [consoleLogsExpanded, setConsoleLogsExpanded] = useState(false)
 
-	const { browserViewportSize = "1280x800" } = useExtensionState()
+	const { browserViewportSize = "900x600" } = useExtensionState()
 	const [viewportWidth, viewportHeight] = browserViewportSize.split("x").map(Number)
 	const aspectRatio = ((viewportHeight / viewportWidth) * 100).toFixed(2)
 	const defaultMousePosition = `${Math.round(viewportWidth / 2)},${Math.round(viewportHeight / 2)}`
