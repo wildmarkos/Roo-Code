@@ -85,6 +85,7 @@ export class BrowserSession {
 			this.browser = await stats.puppeteer.launch({
 				args: [
 					"--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+					"--no-sandbox",
 				],
 				executablePath: stats.executablePath,
 				defaultViewport: (() => {
@@ -95,6 +96,13 @@ export class BrowserSession {
 			})
 			// (latest version of puppeteer does not add headless to user agent)
 			this.page = await this.browser?.newPage()
+			await this.page?.setDefaultNavigationTimeout(15000)
+			await this.page?.setExtraHTTPHeaders({
+				Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+				"Accept-Language": "en-US,en;q=0.5",
+				Connection: "keep-alive",
+				"Upgrade-Insecure-Requests": "1",
+			})
 		}
 	}
 
@@ -152,14 +160,6 @@ export class BrowserSession {
 		} catch (err) {
 			if (!(err instanceof TimeoutError)) {
 				logs.push(`[Error] ${err.toString()}`)
-				const currentUrl = this.page?.url() || ""
-				await this.closeBrowser()
-				return {
-					screenshot: "",
-					logs: logs.join("\n"),
-					currentUrl,
-					currentMousePosition: this.currentMousePosition,
-				}
 			}
 		}
 
@@ -215,7 +215,7 @@ export class BrowserSession {
 	async navigateToUrl(url: string): Promise<BrowserActionResult> {
 		return this.doAction(async (page) => {
 			// networkidle2 isn't good enough since page may take some time to load. we can assume locally running dev sites will reach networkidle0 in a reasonable amount of time
-			await page.goto(url, { timeout: 7_000, waitUntil: ["domcontentloaded", "networkidle2"] })
+			await page.goto(url, { timeout: 15_000, waitUntil: "domcontentloaded" })
 			// await page.goto(url, { timeout: 10_000, waitUntil: "load" })
 			await this.waitTillHTMLStable(page) // in case the page is loading more resources
 		})
@@ -273,14 +273,12 @@ export class BrowserSession {
 
 			if (hasNetworkActivity) {
 				// If we detected network activity, wait for navigation/loading
-				try {
-					await page.waitForNavigation({
-						waitUntil: ["domcontentloaded", "networkidle2"],
-						timeout: 7000,
+				await page
+					.waitForNavigation({
+						waitUntil: "domcontentloaded",
+						timeout: 15000,
 					})
-				} catch (err) {
-					// Ignore navigation timeout errors
-				}
+					.catch(() => {})
 				await this.waitTillHTMLStable(page)
 			}
 
