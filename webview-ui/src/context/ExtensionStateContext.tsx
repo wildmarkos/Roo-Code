@@ -82,6 +82,7 @@ export interface ExtensionStateContextType extends ExtensionState {
 	handleInputChange: (field: keyof ApiConfiguration, softUpdate?: boolean) => (event: any) => void
 	customModes: ModeConfig[]
 	setCustomModes: (value: ModeConfig[]) => void
+	setMaxOpenTabsContext: (value: number) => void
 	keepBrowserOpen: boolean
 	setKeepBrowserOpen: (value: boolean) => void
 }
@@ -119,6 +120,7 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		enhancementApiConfigId: "",
 		autoApprovalEnabled: false,
 		customModes: [],
+		maxOpenTabsContext: 20,
 		keepBrowserOpen: false,
 	})
 
@@ -353,6 +355,7 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		setAutoApprovalEnabled: (value) => setState((prevState) => ({ ...prevState, autoApprovalEnabled: value })),
 		handleInputChange,
 		setCustomModes: (value) => setState((prevState) => ({ ...prevState, customModes: value })),
+		setMaxOpenTabsContext: (value) => setState((prevState) => ({ ...prevState, maxOpenTabsContext: value })),
 		setKeepBrowserOpen: (value) => setState((prevState) => ({ ...prevState, keepBrowserOpen: value })),
 	}
 
