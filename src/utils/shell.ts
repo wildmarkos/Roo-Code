@@ -49,9 +49,6 @@ function getWindowsTerminalConfig() {
 		const config = vscode.workspace.getConfiguration("terminal.integrated")
 		const defaultProfileName = config.get<string>("defaultProfile.windows")
 		const profiles = config.get<WindowsTerminalProfiles>("profiles.windows") || {}
-		console.log(`getWindowsTerminalConfig.defaultProfileName = ${defaultProfileName}`)
-		console.log(profiles["Git Bash"])
-		console.log(process.env)
 		return { defaultProfileName, profiles }
 	} catch {
 		return { defaultProfileName: null, profiles: {} as WindowsTerminalProfiles }
