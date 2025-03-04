@@ -3411,8 +3411,15 @@ export class Cline {
 
 			service.on("initialize", () => {
 				try {
+					const isCheckpointNeeded =
+						typeof this.clineMessages.find(({ say }) => say === "checkpoint_saved") === "undefined"
+
 					this.checkpointService = service
-					this.checkpointSave()
+
+					if (isCheckpointNeeded) {
+						log("[Cline#initializeCheckpoints] no checkpoints found, saving initial checkpoint")
+						this.checkpointSave()
+					}
 				} catch (err) {
 					log("[Cline#initializeCheckpoints] caught error in on('initialize'), disabling checkpoints")
 					this.enableCheckpoints = false

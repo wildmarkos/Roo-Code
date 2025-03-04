@@ -31,13 +31,24 @@ export class RepoPerWorkspaceCheckpointService extends ShadowCheckpointService {
 	}
 
 	override async initShadowGit() {
-		await super.initShadowGit()
+		const result = await super.initShadowGit()
 		await this.checkoutTaskBranch()
+		return result
+	}
+
+	override async saveCheckpoint(message: string) {
+		await this.checkoutTaskBranch()
+		return super.saveCheckpoint(message)
 	}
 
 	override async restoreCheckpoint(commitHash: string) {
 		await this.checkoutTaskBranch()
 		await super.restoreCheckpoint(commitHash)
+	}
+
+	override async getDiff({ from, to }: { from?: string; to?: string }) {
+		await this.checkoutTaskBranch()
+		return super.getDiff({ from, to })
 	}
 
 	public static create({ taskId, workspaceDir, shadowDir, log = console.log }: CheckpointServiceOptions) {

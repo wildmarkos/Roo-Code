@@ -57,7 +57,7 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 
 	public async initShadowGit() {
 		if (this.git) {
-			return
+			throw new Error("Shadow git repo already initialized")
 		}
 
 		await fs.mkdir(this.checkpointsDir, { recursive: true })
@@ -119,7 +119,7 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 			await fs.mkdir(path.join(this.dotGitDir, "info"), { recursive: true })
 			const excludesPath = path.join(this.dotGitDir, "info", "exclude")
 			await fs.writeFile(excludesPath, [...GIT_EXCLUDES, ...lfsPatterns].join("\n"))
-			await this.stageAll()
+			await this.stageAll(git)
 			const { commit } = await git.commit("initial commit", { "--allow-empty": null })
 			this.baseHash = commit
 			this.log(`[${this.constructor.name}#initShadowGit] base commit is ${commit}`)
@@ -139,18 +139,16 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 			created,
 			duration,
 		})
+
+		return { created, duration }
 	}
 
-	private async stageAll() {
-		if (!this.git) {
-			throw new Error("Shadow git repo not initialized")
-		}
-
+	private async stageAll(git: SimpleGit) {
 		// await writeExcludesFile(gitPath, await getLfsPatterns(this.cwd)).
 		await this.renameNestedGitRepos(true)
 
 		try {
-			await this.git.add(".")
+			await git.add(".")
 		} catch (error) {
 			this.log(
 				`[${this.constructor.name}#stageAll] failed to add files to git: ${error instanceof Error ? error.message : String(error)}`,
@@ -222,7 +220,7 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 			}
 
 			const startTime = Date.now()
-			await this.stageAll()
+			await this.stageAll(this.git)
 			const result = await this.git.commit(message)
 			const isFirst = this._checkpoints.length === 0
 			const fromHash = this._checkpoints[this._checkpoints.length - 1] ?? this.baseHash!
@@ -282,7 +280,7 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 		}
 
 		// Stage all changes so that untracked files appear in diff summary.
-		await this.stageAll()
+		await this.stageAll(this.git)
 
 		const { files } = to ? await this.git.diffSummary([`${from}..${to}`]) : await this.git.diffSummary([from])
 

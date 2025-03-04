@@ -14,7 +14,7 @@ jest.mock("globby", () => ({
 	globby: jest.fn().mockResolvedValue([]),
 }))
 
-const tmpDir = path.join(os.tmpdir(), "test-ShadowCheckpointService")
+const tmpDir = path.join(os.tmpdir(), "CheckpointService")
 
 const initRepo = async ({
 	workspaceDir,
@@ -311,10 +311,11 @@ describe.each([
 			expect(await fs.readFile(newTestFile, "utf-8")).toBe("Hello, world!")
 
 			// Ensure the git repository was initialized.
-			const gitDir = path.join(shadowDir, "tasks", taskId, "checkpoints", ".git")
-			await expect(fs.stat(gitDir)).rejects.toThrow()
 			const newService = await klass.create({ taskId, shadowDir, workspaceDir, log: () => {} })
-			await newService.initShadowGit()
+			const { created } = await newService.initShadowGit()
+			expect(created).toBeTruthy()
+
+			const gitDir = path.join(newService.checkpointsDir, ".git")
 			expect(await fs.stat(gitDir)).toBeTruthy()
 
 			// Save a new checkpoint: Ahoy, world!
